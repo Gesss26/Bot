@@ -568,7 +568,12 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
     future_matches = [m for m in matches if m.stato == "Futura"]
     today = get_today_str()
     limit_date = (datetime.now() + timedelta(days=days_range)).strftime("%Y-%m-%d")
-    future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
+    
+    # 🔥 MODIFICA: se days_range == 1, prendi SOLO le partite di oggi
+    if days_range == 1:
+        future_matches = [m for m in future_matches if m.data == today]
+    else:
+        future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
     
     logger.info(f"🔍 Trovate {len(future_matches)} partite future fino al {limit_date}")
     
