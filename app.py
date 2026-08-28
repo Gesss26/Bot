@@ -285,7 +285,6 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form += 'S'
     
-    # Converti in pallini colorati
     form_pallini = ''
     for f in form:
         if f == 'V':
@@ -295,7 +294,6 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form_pallini += '🔴'
     
-    # Se non ci sono partite, mostra pallini grigi
     if not form_pallini:
         form_pallini = '⚪⚪⚪⚪⚪'
     
@@ -445,7 +443,7 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     
     return 0
 
-def get_best_bets_for_family(family_id: str, stats: Dict, limit: int = 2) -> List[Dict]:
+def get_best_bets_for_family(family_id: str, stats: Dict, limit: int = 3) -> List[Dict]:
     """Restituisce le migliori N giocate per una famiglia"""
     family = FAMIGLIE_GIOCATE.get(family_id)
     if not family:
@@ -460,7 +458,7 @@ def get_best_bets_for_family(family_id: str, stats: Dict, limit: int = 2) -> Lis
     results.sort(key=lambda x: x['pct'], reverse=True)
     return results[:limit]
 
-def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> List[MatchAnalysis]:
+def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int) -> List[MatchAnalysis]:
     future_matches = [m for m in matches if m.stato == "Futura"]
     today = get_today_str()
     limit_date = (datetime.now() + timedelta(days=days_range)).strftime("%Y-%m-%d")
@@ -478,20 +476,21 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
         home_form = calc_form_and_stats(matches, match.casa)
         away_form = calc_form_and_stats(matches, match.ospiti)
         
-        # Prendi le migliori 2 giocate
-        best_bets = get_best_bets_for_family(family_id, stats, limit=2)
-        if not best_bets:
+        giocate = []
+        for family_id in family_ids:
+            best_bets = get_best_bets_for_family(family_id, stats, limit=1)
+            for bet in best_bets:
+                giocate.append(Giocata(
+                    famiglia=FAMIGLIE_GIOCATE[family_id]['label'],
+                    label=bet['giocata'],
+                    pct=bet['pct'],
+                    is_bomb=bet['pct'] >= 90
+                ))
+        
+        if not giocate:
             continue
         
-        giocate = []
-        for bet in best_bets:
-            giocate.append(Giocata(
-                famiglia=FAMIGLIE_GIOCATE[family_id]['label'],
-                label=bet['giocata'],
-                pct=bet['pct'],
-                is_bomb=bet['pct'] >= 90
-            ))
-        
+        giocate.sort(key=lambda x: x.pct, reverse=True)
         score = round(sum(g.pct for g in giocate) / len(giocate))
         has_bomb = any(g.is_bomb for g in giocate)
         
@@ -537,7 +536,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         lines.append(f"✈️ {match.ospiti}")
         lines.append("")
         
-        # Forma con pallini colorati
         lines.append(f"📊 {match.casa}")
         lines.append(f"{analysis.home_form['form_pallini']} = {analysis.home_form['pct']}%")
         lines.append("")
@@ -545,11 +543,9 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         lines.append(f"{analysis.away_form['form_pallini']} = {analysis.away_form['pct']}%")
         lines.append("")
         
-        # xG
         lines.append(f"⚽ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
         lines.append("")
         
-        # Giocate (le migliori 2)
         for g in giocate:
             if g.pct >= 90:
                 emoji = '💣'
@@ -561,7 +557,7 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
                 emoji = '🔴'
             
             bomb = ' 💣' if g.is_bomb else ''
-            lines.append(f"🎯 {g.label} {emoji} *{g.pct}%*{bomb}")
+            lines.append(f"🎯 {g.famiglia}: {g.label} {emoji} *{g.pct}%*{bomb}")
         
         lines.append("")
         lines.append(f"📊 Score: *{analysis.score}%*")
@@ -625,43 +621,60 @@ def create_days_keyboard() -> dict:
 
 def create_count_keyboard() -> dict:
     buttons = []
-    for count in [1, 2, 3, 4, 5]:
+    for count in [1, 2, 3]:
         buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
-    for count in [6, 7, 8, 9, 10]:
+    for count in [4, 5, 6]:
         buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    for count in [7, 8, 9]:
+        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    buttons.append({'text': '10', 'callback_data': 'count_10'})
     buttons.append({'text': '✅ CONFERMA', 'callback_data': 'count_confirm'})
     return create_inline_keyboard(buttons)
 
 # ============================================================
-# GESTIONE COMANDI
+# GESTIONE COMANDI - CON 2 GIOCATE
 # ============================================================
 
 def handle_start(chat_id: str):
-    user_states[chat_id] = {'step': 'start', 'selected_family': None, 'selected_days': 3, 'selected_count': 5}
+    user_states[chat_id] = {
+        'step': 'start',
+        'giocata1': None,
+        'giocata2': None,
+        'selected_days': 3,
+        'selected_count': 5
+    }
     
     text = """🤖 *GesssAI-Pro*
 
-🇮🇹 Scegli una famiglia e ti mostro le migliori 2 giocate per ogni partita!
+🇮🇹 Scegli 2 famiglie di giocate!
 
 *Passaggi:*
-1️⃣ Scegli *1 famiglia*
-2️⃣ Scegli *range giorni* (1-5)
-3️⃣ Scegli *quante partite* (1-10)"""
+1️⃣ Scegli *Giocata 1*
+2️⃣ Scegli *Giocata 2*
+3️⃣ Scegli *range giorni* (1-5)
+4️⃣ Scegli *quante partite* (1-10)"""
     
     keyboard = create_inline_keyboard([{'text': '🎯 INIZIA', 'callback_data': 'start_setup'}])
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_start_setup(chat_id: str):
     if chat_id not in user_states:
-        user_states[chat_id] = {'step': 'selecting_family', 'selected_family': None, 'selected_days': 3, 'selected_count': 5}
+        user_states[chat_id] = {
+            'step': 'selecting_giocata1',
+            'giocata1': None,
+            'giocata2': None,
+            'selected_days': 3,
+            'selected_count': 5
+        }
     
     state = user_states[chat_id]
-    state['step'] = 'selecting_family'
-    state['selected_family'] = None
+    state['step'] = 'selecting_giocata1'
+    state['giocata1'] = None
+    state['giocata2'] = None
     
-    text = """🎯 *Scegli una famiglia*
+    text = """🎯 *Giocata 1*
 
-Clicca su una famiglia per selezionarla."""
+Scegli la prima famiglia di giocate."""
     
     keyboard = create_family_keyboard()
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
@@ -671,14 +684,35 @@ def handle_family_selection(chat_id: str, family_id: str):
         return
     
     state = user_states[chat_id]
-    state['selected_family'] = family_id
     
-    text = f"""✅ *{FAMIGLIE_GIOCATE[family_id]['label']}*
+    if state['step'] == 'selecting_giocata1':
+        state['giocata1'] = family_id
+        state['step'] = 'selecting_giocata2'
+        
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[family_id]['label']}*
 
-Ora scegli i *giorni* (1-5)."""
+🎯 *Giocata 2*
+
+Scegli la seconda famiglia di giocate."""
+        
+        keyboard = create_family_keyboard()
+        send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
     
-    keyboard = create_days_keyboard()
-    send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
+    elif state['step'] == 'selecting_giocata2':
+        if family_id == state['giocata1']:
+            send_message(chat_id, "⚠️ Hai già scelto questa famiglia per la Giocata 1! Scegline un'altra.")
+            return
+        
+        state['giocata2'] = family_id
+        state['step'] = 'selecting_days'
+        
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}*
+✅ *Giocata 2: {FAMIGLIE_GIOCATE[family_id]['label']}*
+
+📅 Ora scegli il *range di giorni* (1-5)."""
+        
+        keyboard = create_days_keyboard()
+        send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_days_selection(chat_id: str, days: int):
     if chat_id not in user_states:
@@ -688,10 +722,12 @@ def handle_days_selection(chat_id: str, days: int):
     state['selected_days'] = days
     state['step'] = 'selecting_count'
     
-    text = f"""📅 *{days} giorni*
-Famiglia: {FAMIGLIE_GIOCATE[state['selected_family']]['label']}
+    text = f"""📅 *Range giorni: {days} giorni*
 
-Scegli *partite* (1-10)."""
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocata2']]['label']}
+
+🔢 Scegli *quante partite* vedere (1-10)."""
     
     keyboard = create_count_keyboard()
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
@@ -703,7 +739,29 @@ def handle_count_selection(chat_id: str, count: int):
     state = user_states[chat_id]
     state['selected_count'] = count
     
-    send_message(chat_id, "⏳ *Caricamento...*", parse_mode='Markdown')
+    # Mostra riepilogo
+    text = f"""📋 *RIEPILOGO*
+
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocata2']]['label']}
+📅 Giorni: {state['selected_days']}
+🔢 Partite: {count}
+
+Confermi?"""
+    
+    keyboard = create_inline_keyboard([
+        {'text': '✅ CONFERMA', 'callback_data': 'confirm_analysis'},
+        {'text': '❌ ANNULLA', 'callback_data': 'cancel_analysis'}
+    ])
+    send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
+
+def handle_confirm_analysis(chat_id: str):
+    if chat_id not in user_states:
+        return
+    
+    state = user_states[chat_id]
+    
+    send_message(chat_id, "⏳ *Caricamento e analisi in corso...*", parse_mode='Markdown')
     
     try:
         df = load_excel_from_github()
@@ -718,13 +776,14 @@ def handle_count_selection(chat_id: str, count: int):
         
         logger.info(f"📊 Caricate {len(matches)} partite")
         
-        analyses = analyze_matches(matches, state['selected_family'], state['selected_days'])
+        family_ids = [state['giocata1'], state['giocata2']]
+        analyses = analyze_matches(matches, family_ids, state['selected_days'])
         
         if not analyses:
             send_message(chat_id, f"📅 *Nessuna partita nei prossimi {state['selected_days']} giorni.*", parse_mode='Markdown')
             return
         
-        report = generate_report(analyses, count)
+        report = generate_report(analyses, state['selected_count'])
         
         if len(report) > 4000:
             chunks = [report[i:i+4000] for i in range(0, len(report), 4000)]
@@ -734,18 +793,27 @@ def handle_count_selection(chat_id: str, count: int):
             send_message(chat_id, report, parse_mode='Markdown')
         
         keyboard = create_inline_keyboard([
-            {'text': '🔄 NUOVA', 'callback_data': 'new_search'}
+            {'text': '🔄 NUOVA RICERCA', 'callback_data': 'new_search'}
         ])
-        send_message(chat_id, "✅ *Completato!*", parse_mode='Markdown', reply_markup=keyboard)
+        send_message(chat_id, "✅ *Analisi completata!*", parse_mode='Markdown', reply_markup=keyboard)
         
     except Exception as e:
         error_msg = f"❌ *Errore:* {str(e)[:100]}"
         logger.error(f"Errore: {e}")
         send_message(chat_id, error_msg, parse_mode='Markdown')
 
+def handle_cancel_analysis(chat_id: str):
+    send_message(chat_id, "❌ *Operazione annullata.* Ricomincia con /start", parse_mode='Markdown')
+
 def handle_new_search(chat_id: str):
     if chat_id in user_states:
-        user_states[chat_id] = {'step': 'start', 'selected_family': None, 'selected_days': 3, 'selected_count': 5}
+        user_states[chat_id] = {
+            'step': 'start',
+            'giocata1': None,
+            'giocata2': None,
+            'selected_days': 3,
+            'selected_count': 5
+        }
     handle_start_setup(chat_id)
 
 # ============================================================
@@ -788,6 +856,10 @@ def webhook():
                 handle_start_setup(chat_id)
             elif callback_data == 'new_search':
                 handle_new_search(chat_id)
+            elif callback_data == 'confirm_analysis':
+                handle_confirm_analysis(chat_id)
+            elif callback_data == 'cancel_analysis':
+                handle_cancel_analysis(chat_id)
             elif callback_data == 'count_confirm':
                 if chat_id in user_states and user_states[chat_id].get('selected_count'):
                     handle_count_selection(chat_id, user_states[chat_id]['selected_count'])
@@ -801,16 +873,25 @@ def webhook():
                 days = int(callback_data[5:])
                 handle_days_selection(chat_id, days)
             elif callback_data.startswith('count_'):
-                count = int(callback_data[6:])
+                if callback_data == 'count_10':
+                    count = 10
+                else:
+                    count = int(callback_data[6:])
                 if chat_id in user_states:
                     state = user_states[chat_id]
                     state['selected_count'] = count
-                    text = f"""🔢 *{count} partite*
-Famiglia: {FAMIGLIE_GIOCATE[state['selected_family']]['label']}
-Giorni: {state['selected_days']}
+                    text = f"""📋 *RIEPILOGO*
 
-Premi *✅ CONFERMA*"""
-                    keyboard = create_count_keyboard()
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocata2']]['label']}
+📅 Giorni: {state['selected_days']}
+🔢 Partite: {count}
+
+Confermi?"""
+                    keyboard = create_inline_keyboard([
+                        {'text': '✅ CONFERMA', 'callback_data': 'confirm_analysis'},
+                        {'text': '❌ ANNULLA', 'callback_data': 'cancel_analysis'}
+                    ])
                     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
         
         return jsonify({'status': 'ok'})
