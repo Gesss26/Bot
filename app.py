@@ -55,7 +55,7 @@ class Giocata:
 @dataclass
 class MatchAnalysis:
     match: Match
-    giocate: List[Giocata]  # Ora contiene PIÙ giocate
+    giocate: List[Giocata]
     score: int
     has_bomb: bool
     home_form: Dict
@@ -285,19 +285,23 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form += 'S'
     
-    # Converti form in emoji
-    form_emoji = ''
+    # Converti in pallini colorati
+    form_pallini = ''
     for f in form:
         if f == 'V':
-            form_emoji += '✅'
+            form_pallini += '🟢'
         elif f == 'P':
-            form_emoji += '➖'
+            form_pallini += '🟡'
         else:
-            form_emoji += '❌'
+            form_pallini += '🔴'
+    
+    # Se non ci sono partite, mostra pallini grigi
+    if not form_pallini:
+        form_pallini = '⚪⚪⚪⚪⚪'
     
     return {
         'form': form or '-----',
-        'form_emoji': form_emoji or '❌',
+        'form_pallini': form_pallini,
         'pct': round((points / (len(team_matches) * 3)) * 100) if team_matches else 50,
         'media_gol_fatti': round(gol_fatti / len(team_matches), 1) if team_matches else 0,
         'media_gol_subiti': round(gol_subiti / len(team_matches), 1) if team_matches else 0,
@@ -505,7 +509,7 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
     return results
 
 # ============================================================
-# GENERAZIONE REPORT - OTTIMIZZATO PER MOBILE
+# GENERAZIONE REPORT - CON PALLINI COLORATI
 # ============================================================
 
 def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
@@ -533,26 +537,33 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         lines.append(f"✈️ {match.ospiti}")
         lines.append("")
         
-        # Forma compatta
-        lines.append(f"📊 {match.casa} {analysis.home_form['form_emoji']} {analysis.home_form['pct']}%")
-        lines.append(f"📊 {match.ospiti} {analysis.away_form['form_emoji']} {analysis.away_form['pct']}%")
+        # Forma con pallini colorati
+        lines.append(f"📊 {match.casa}")
+        lines.append(f"{analysis.home_form['form_pallini']} = {analysis.home_form['pct']}%")
+        lines.append("")
+        lines.append(f"📊 {match.ospiti}")
+        lines.append(f"{analysis.away_form['form_pallini']} = {analysis.away_form['pct']}%")
+        lines.append("")
+        
+        # xG
         lines.append(f"⚽ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
         lines.append("")
         
-        # Giocate
+        # Giocate (le migliori 2)
         for g in giocate:
             if g.pct >= 90:
                 emoji = '💣'
             elif g.pct >= 67:
                 emoji = '🟢'
             elif g.pct >= 34:
-                emoji = '⚪'
+                emoji = '🟡'
             else:
                 emoji = '🔴'
             
             bomb = ' 💣' if g.is_bomb else ''
             lines.append(f"🎯 {g.label} {emoji} *{g.pct}%*{bomb}")
         
+        lines.append("")
         lines.append(f"📊 Score: *{analysis.score}%*")
         
         if analysis.has_bomb:
@@ -591,7 +602,7 @@ def create_inline_keyboard(buttons: List[Dict[str, str]]) -> dict:
     row = []
     for button in buttons:
         row.append({'text': button['text'], 'callback_data': button['callback_data']})
-        if len(row) == 2:  # 2 pulsanti per riga per mobile
+        if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
@@ -614,7 +625,6 @@ def create_days_keyboard() -> dict:
 
 def create_count_keyboard() -> dict:
     buttons = []
-    row = []
     for count in [1, 2, 3, 4, 5]:
         buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
     for count in [6, 7, 8, 9, 10]:
