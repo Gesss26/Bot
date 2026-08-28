@@ -74,9 +74,9 @@ FAMIGLIE_GIOCATE = {
     'under': {'id': 'under', 'label': '⬇️ Under', 'options': ['Under 1.5', 'Under 2.5', 'Under 3.5', 'Under 4.5']},
     'dc_under': {'id': 'dc_under', 'label': '🔗 DC+Under', 'options': ['1X+U1.5', '12+U1.5', 'X2+U1.5', '1X+U2.5', '12+U2.5', 'X2+U2.5', '1X+U3.5', '12+U3.5', 'X2+U3.5', '1X+U4.5', '12+U4.5', 'X2+U4.5']},
     'dc_over': {'id': 'dc_over', 'label': '🔗 DC+Over', 'options': ['1X+O1.5', '12+O1.5', 'X2+O1.5', '1X+O2.5', '12+O2.5', 'X2+O2.5', '1X+O3.5', '12+O3.5', 'X2+O3.5', '1X+O4.5', '12+O4.5', 'X2+O4.5']},
-    'multigol': {'id': 'multigol', 'label': '📊 Multigol Totale', 'options': ['0-2', '1-3', '1-4', '2-5']},
-    'mg_casa_ospite': {'id': 'mg_casa_ospite', 'label': '⚔️ MG Casa+Ospite', 'options': ['0-1+0-1', '0-1+0-2', '0-1+1-3', '0-1+2-5', '0-2+0-1', '0-2+0-2', '0-2+1-3', '0-2+2-5', '1-3+0-1', '1-3+0-2', '1-3+1-3', '1-3+2-5', '2-5+0-1', '2-5+0-2', '2-5+1-3', '2-5+2-5']},
-    'dc_multigol': {'id': 'dc_multigol', 'label': '🔗 DC+Multigol', 'options': ['1X+0-2', '12+0-2', 'X2+0-2', '1X+1-3', '12+1-3', 'X2+1-3', '1X+1-4', '12+1-4', 'X2+1-4', '1X+2-5', '12+2-5', 'X2+2-5']}
+    'multigol': {'id': 'multigol', 'label': '📊 Multigol Totale', 'options': ['0-2', '1-3', '2-5']},
+    'mg_casa_ospite': {'id': 'mg_casa_ospite', 'label': '⚔️ MG Casa+Ospite', 'options': ['0-2+0-2', '0-2+1-3', '0-2+2-5', '1-3+0-2', '1-3+1-3', '1-3+2-5', '2-5+0-2', '2-5+1-3', '2-5+2-5']},
+    'dc_multigol': {'id': 'dc_multigol', 'label': '🔗 DC+Multigol', 'options': ['1X+0-2', '12+0-2', 'X2+0-2', '1X+1-3', '12+1-3', 'X2+1-3', '1X+2-5', '12+2-5', 'X2+2-5']}
 }
 
 FAMIGLIE_LIST = [
@@ -134,6 +134,34 @@ def format_date_eu(date_str: str) -> str:
 
 def get_today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+# ============================================================
+# FUNZIONI PER MULTIGOL
+# ============================================================
+
+def get_multigol_range(media_gol: float) -> str:
+    """
+    Calcola la fascia multigol in base alla media gol fatti
+    Fascie disponibili: 0-2, 1-3, 2-5
+    """
+    if media_gol <= 1.0:
+        return "0-2"
+    elif media_gol <= 2.5:
+        return "1-3"
+    else:
+        return "2-5"
+
+def get_multigol_total_range(media_home: float, media_away: float) -> str:
+    """
+    Calcola la fascia multigol totale in base alla somma delle medie
+    """
+    media_totale = media_home + media_away
+    if media_totale <= 2.0:
+        return "0-2"
+    elif media_totale <= 4.0:
+        return "1-3"
+    else:
+        return "2-5"
 
 # ============================================================
 # CARICAMENTO DATI
@@ -378,7 +406,11 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
         'total_games': total
     }
 
-def get_giocata_pct(giocata: str, stats: Dict) -> int:
+def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None) -> int:
+    """
+    Calcola la percentuale per una giocata
+    Supporta anche MG Casa+Ospite usando le medie gol
+    """
     if stats.get('error'):
         return 0
     
@@ -392,6 +424,59 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     ng = stats.get('ng', 0)
     under_over = stats.get('under_over', [])
     
+    # Gestione MG Casa+Ospite
+    if '+' in giocata and '-+' in giocata:
+        if home_media_gol is not None and away_media_gol is not None:
+            # Calcola le fasce in base alle medie
+            home_range = get_multigol_range(home_media_gol)
+            away_range = get_multigol_range(away_media_gol)
+            expected_giocata = f"{home_range}+{away_range}"
+            
+            # Se la giocata corrisponde alla fascia calcolata, alta percentuale
+            if giocata == expected_giocata:
+                return 90
+            else:
+                # Calcola similarità tra le fasce
+                home_parts = giocata.split('+')[0].split('-')
+                away_parts = giocata.split('+')[1].split('-')
+                expected_home = home_range.split('-')
+                expected_away = away_range.split('-')
+                
+                # Calcola quanto è vicina la fascia
+                home_diff = abs(int(home_parts[0]) - int(expected_home[0])) + abs(int(home_parts[1]) - int(expected_home[1]))
+                away_diff = abs(int(away_parts[0]) - int(expected_away[0])) + abs(int(away_parts[1]) - int(expected_away[1]))
+                
+                if home_diff == 0 and away_diff == 0:
+                    return 90
+                elif home_diff <= 2 and away_diff <= 2:
+                    return 75
+                elif home_diff <= 4 and away_diff <= 4:
+                    return 60
+                else:
+                    return 40
+        
+        return 50  # Valore di default se non ci sono medie
+    
+    # Gestione Multigol Totale
+    if giocata in ['0-2', '1-3', '2-5']:
+        if home_media_gol is not None and away_media_gol is not None:
+            expected_range = get_multigol_total_range(home_media_gol, away_media_gol)
+            if giocata == expected_range:
+                return 85
+            else:
+                # Calcola similarità
+                parts = giocata.split('-')
+                expected_parts = expected_range.split('-')
+                diff = abs(int(parts[0]) - int(expected_parts[0])) + abs(int(parts[1]) - int(expected_parts[1]))
+                if diff <= 2:
+                    return 70
+                elif diff <= 4:
+                    return 50
+                else:
+                    return 30
+        return 50
+    
+    # Giocate standard
     if giocata == '1':
         return p1
     if giocata == 'X':
@@ -421,6 +506,7 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     if giocata == 'Under 4.5':
         return under_over[3]['under'] if len(under_over) > 3 else 0
     
+    # Gestione DC+Under/Over
     if giocata.startswith('1X+O'):
         over = giocata.replace('1X+O', 'Over ')
         return round((p1X + get_giocata_pct(over, stats)) / 2)
@@ -430,7 +516,6 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     if giocata.startswith('X2+O'):
         over = giocata.replace('X2+O', 'Over ')
         return round((pX2 + get_giocata_pct(over, stats)) / 2)
-    
     if giocata.startswith('1X+U'):
         under = giocata.replace('1X+U', 'Under ')
         return round((p1X + get_giocata_pct(under, stats)) / 2)
@@ -441,9 +526,26 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
         under = giocata.replace('X2+U', 'Under ')
         return round((pX2 + get_giocata_pct(under, stats)) / 2)
     
+    # Gestione DC+Multigol
+    if giocata.startswith('1X+'):
+        multigol = giocata.replace('1X+', '')
+        if multigol in ['0-2', '1-3', '2-5']:
+            multigol_pct = get_giocata_pct(multigol, stats, home_media_gol, away_media_gol)
+            return round((p1X + multigol_pct) / 2)
+    if giocata.startswith('12+'):
+        multigol = giocata.replace('12+', '')
+        if multigol in ['0-2', '1-3', '2-5']:
+            multigol_pct = get_giocata_pct(multigol, stats, home_media_gol, away_media_gol)
+            return round((p12 + multigol_pct) / 2)
+    if giocata.startswith('X2+'):
+        multigol = giocata.replace('X2+', '')
+        if multigol in ['0-2', '1-3', '2-5']:
+            multigol_pct = get_giocata_pct(multigol, stats, home_media_gol, away_media_gol)
+            return round((pX2 + multigol_pct) / 2)
+    
     return 0
 
-def get_best_bets_for_family(family_id: str, stats: Dict, limit: int = 3) -> List[Dict]:
+def get_best_bets_for_family(family_id: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None, limit: int = 3) -> List[Dict]:
     """Restituisce le migliori N giocate per una famiglia"""
     family = FAMIGLIE_GIOCATE.get(family_id)
     if not family:
@@ -451,7 +553,7 @@ def get_best_bets_for_family(family_id: str, stats: Dict, limit: int = 3) -> Lis
     
     results = []
     for opt in family['options']:
-        pct = get_giocata_pct(opt, stats)
+        pct = get_giocata_pct(opt, stats, home_media_gol, away_media_gol)
         if pct > 0:
             results.append({'giocata': opt, 'pct': pct})
     
@@ -478,19 +580,43 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
         
         giocate = []
         for family_id in family_ids:
-            best_bets = get_best_bets_for_family(family_id, stats, limit=1)
-            for bet in best_bets:
-                giocate.append(Giocata(
-                    famiglia=FAMIGLIE_GIOCATE[family_id]['label'],
-                    label=bet['giocata'],
-                    pct=bet['pct'],
-                    is_bomb=bet['pct'] >= 90
-                ))
+            family = FAMIGLIE_GIOCATE.get(family_id)
+            if not family:
+                continue
+            
+            # Per famiglie che necessitano delle medie gol
+            if family_id in ['mg_casa_ospite', 'multigol', 'dc_multigol']:
+                best_bets = get_best_bets_for_family(
+                    family_id, 
+                    stats, 
+                    home_media_gol=home_form['media_gol_fatti'],
+                    away_media_gol=away_form['media_gol_fatti'],
+                    limit=3
+                )
+                for bet in best_bets:
+                    giocate.append(Giocata(
+                        famiglia=family['label'],
+                        label=bet['giocata'],
+                        pct=bet['pct'],
+                        is_bomb=bet['pct'] >= 90
+                    ))
+            else:
+                best_bets = get_best_bets_for_family(family_id, stats, limit=3)
+                for bet in best_bets:
+                    giocate.append(Giocata(
+                        famiglia=family['label'],
+                        label=bet['giocata'],
+                        pct=bet['pct'],
+                        is_bomb=bet['pct'] >= 90
+                    ))
         
         if not giocate:
             continue
         
+        # Ordina per percentuale e prendi le migliori 3
         giocate.sort(key=lambda x: x.pct, reverse=True)
+        giocate = giocate[:3]
+        
         score = round(sum(g.pct for g in giocate) / len(giocate))
         has_bomb = any(g.is_bomb for g in giocate)
         
@@ -508,7 +634,7 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
     return results
 
 # ============================================================
-# GENERAZIONE REPORT - CON PALLINI COLORATI
+# GENERAZIONE REPORT
 # ============================================================
 
 def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
@@ -538,9 +664,12 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         
         lines.append(f"📊 {match.casa}")
         lines.append(f"{analysis.home_form['form_pallini']} = {analysis.home_form['pct']}%")
+        lines.append(f"⚽ Media gol: {analysis.home_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.home_form['media_gol_fatti'])}")
         lines.append("")
+        
         lines.append(f"📊 {match.ospiti}")
         lines.append(f"{analysis.away_form['form_pallini']} = {analysis.away_form['pct']}%")
+        lines.append(f"⚽ Media gol: {analysis.away_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.away_form['media_gol_fatti'])}")
         lines.append("")
         
         lines.append(f"⚽ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
@@ -632,7 +761,7 @@ def create_count_keyboard() -> dict:
     return create_inline_keyboard(buttons)
 
 # ============================================================
-# GESTIONE COMANDI - CON 2 GIOCATE
+# GESTIONE COMANDI
 # ============================================================
 
 def handle_start(chat_id: str):
