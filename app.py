@@ -55,8 +55,9 @@ class Giocata:
 @dataclass
 class MatchAnalysis:
     match: Match
-    giocata: Giocata
+    giocate: List[Giocata]  # Ora contiene PIÙ giocate
     score: int
+    has_bomb: bool
     home_form: Dict
     away_form: Dict
 
@@ -92,7 +93,6 @@ FAMIGLIE_LIST = [
     ('dc_multigol', '🔗 DC+Multigol')
 ]
 
-# Stato utente (in memoria - attenzione: si resetta se il server si riavvia)
 user_states = {}
 
 # ============================================================
@@ -285,8 +285,19 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form += 'S'
     
+    # Converti form in emoji
+    form_emoji = ''
+    for f in form:
+        if f == 'V':
+            form_emoji += '✅'
+        elif f == 'P':
+            form_emoji += '➖'
+        else:
+            form_emoji += '❌'
+    
     return {
         'form': form or '-----',
+        'form_emoji': form_emoji or '❌',
         'pct': round((points / (len(team_matches) * 3)) * 100) if team_matches else 50,
         'media_gol_fatti': round(gol_fatti / len(team_matches), 1) if team_matches else 0,
         'media_gol_subiti': round(gol_subiti / len(team_matches), 1) if team_matches else 0,
@@ -430,29 +441,20 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     
     return 0
 
-def get_best_bet_for_family(family_id: str, stats: Dict) -> Optional[Dict]:
+def get_best_bets_for_family(family_id: str, stats: Dict, limit: int = 2) -> List[Dict]:
+    """Restituisce le migliori N giocate per una famiglia"""
     family = FAMIGLIE_GIOCATE.get(family_id)
     if not family:
-        return None
+        return []
     
-    best = None
-    best_pct = -1
-    
+    results = []
     for opt in family['options']:
         pct = get_giocata_pct(opt, stats)
-        if pct > best_pct:
-            best_pct = pct
-            best = {'giocata': opt, 'pct': pct}
+        if pct > 0:
+            results.append({'giocata': opt, 'pct': pct})
     
-    if best and best['pct'] > 0:
-        return {
-            'giocata': best['giocata'],
-            'pct': best['pct'],
-            'is_bomb': best['pct'] >= 90,
-            'family_label': family['label']
-        }
-    
-    return None
+    results.sort(key=lambda x: x['pct'], reverse=True)
+    return results[:limit]
 
 def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> List[MatchAnalysis]:
     future_matches = [m for m in matches if m.stato == "Futura"]
@@ -472,21 +474,28 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
         home_form = calc_form_and_stats(matches, match.casa)
         away_form = calc_form_and_stats(matches, match.ospiti)
         
-        best = get_best_bet_for_family(family_id, stats)
-        if not best:
+        # Prendi le migliori 2 giocate
+        best_bets = get_best_bets_for_family(family_id, stats, limit=2)
+        if not best_bets:
             continue
         
-        giocata = Giocata(
-            famiglia=best['family_label'],
-            label=best['giocata'],
-            pct=best['pct'],
-            is_bomb=best['is_bomb']
-        )
+        giocate = []
+        for bet in best_bets:
+            giocate.append(Giocata(
+                famiglia=FAMIGLIE_GIOCATE[family_id]['label'],
+                label=bet['giocata'],
+                pct=bet['pct'],
+                is_bomb=bet['pct'] >= 90
+            ))
+        
+        score = round(sum(g.pct for g in giocate) / len(giocate))
+        has_bomb = any(g.is_bomb for g in giocate)
         
         results.append(MatchAnalysis(
             match=match,
-            giocata=giocata,
-            score=best['pct'],
+            giocate=giocate,
+            score=score,
+            has_bomb=has_bomb,
             home_form=home_form,
             away_form=away_form
         ))
@@ -496,7 +505,7 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
     return results
 
 # ============================================================
-# GENERAZIONE REPORT
+# GENERAZIONE REPORT - OTTIMIZZATO PER MOBILE
 # ============================================================
 
 def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
@@ -506,48 +515,55 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
     top = analyses[:count]
     
     lines = []
-    lines.append("📊 *GesssAI-Pro - Report Partite*")
+    lines.append("📊 *GesssAI-Pro*")
     lines.append(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    lines.append(f"🏟️ {len(top)} partite su {len(analyses)} trovate")
+    lines.append(f"🏟️ {len(top)} partite")
     lines.append("")
-    lines.append("━" * 30)
+    lines.append("─" * 25)
     lines.append("")
     
     for i, analysis in enumerate(top, 1):
         match = analysis.match
-        g = analysis.giocata
+        giocate = analysis.giocate
         
-        if g.pct >= 90:
-            emoji = '💣'
-        elif g.pct >= 67:
-            emoji = '🟢'
-        elif g.pct >= 34:
-            emoji = '⚪'
-        else:
-            emoji = '🔴'
-        
-        bomb = ' 💣' if g.is_bomb else ''
-        
-        lines.append(f"*#{i} - {match.campionato}*")
-        lines.append(f"📅 {format_date_eu(match.data)} - ⏰ {match.ora}")
-        lines.append(f"*⚔️ {match.casa} vs {match.ospiti}*")
-        lines.append(f"📊 Forma: {match.casa} {format_form(analysis.home_form['form'])} ({analysis.home_form['pct']}%) | {match.ospiti} {format_form(analysis.away_form['form'])} ({analysis.away_form['pct']}%)")
-        lines.append(f"⚽ xG: {match.casa} {analysis.home_form['media_gol_fatti']} | {match.ospiti} {analysis.away_form['media_gol_fatti']}")
+        lines.append(f"*#{i} {match.campionato}*")
+        lines.append(f"📅 {format_date_eu(match.data)} {match.ora}")
         lines.append("")
-        lines.append(f"🎯 *{g.famiglia}*: {g.label} {emoji} *{g.pct}%*{bomb}")
-        lines.append(f"📊 Score: {analysis.score}%")
+        lines.append(f"🏠 {match.casa}")
+        lines.append(f"✈️ {match.ospiti}")
+        lines.append("")
+        
+        # Forma compatta
+        lines.append(f"📊 {match.casa} {analysis.home_form['form_emoji']} {analysis.home_form['pct']}%")
+        lines.append(f"📊 {match.ospiti} {analysis.away_form['form_emoji']} {analysis.away_form['pct']}%")
+        lines.append(f"⚽ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
+        lines.append("")
+        
+        # Giocate
+        for g in giocate:
+            if g.pct >= 90:
+                emoji = '💣'
+            elif g.pct >= 67:
+                emoji = '🟢'
+            elif g.pct >= 34:
+                emoji = '⚪'
+            else:
+                emoji = '🔴'
+            
+            bomb = ' 💣' if g.is_bomb else ''
+            lines.append(f"🎯 {g.label} {emoji} *{g.pct}%*{bomb}")
+        
+        lines.append(f"📊 Score: *{analysis.score}%*")
+        
+        if analysis.has_bomb:
+            lines.append("💣 *BOMBA!*")
         
         if i < len(top):
             lines.append("")
-            lines.append("─" * 30)
+            lines.append("─" * 25)
             lines.append("")
     
     return "\n".join(lines)
-
-def format_form(form: str) -> str:
-    if not form:
-        return '❌'
-    return ''.join(['✅' if f == 'V' else '➖' if f == 'P' else '❌' for f in form])
 
 # ============================================================
 # FUNZIONI TELEGRAM
@@ -575,7 +591,7 @@ def create_inline_keyboard(buttons: List[Dict[str, str]]) -> dict:
     row = []
     for button in buttons:
         row.append({'text': button['text'], 'callback_data': button['callback_data']})
-        if len(row) == 3:
+        if len(row) == 2:  # 2 pulsanti per riga per mobile
             keyboard.append(row)
             row = []
     if row:
@@ -598,7 +614,10 @@ def create_days_keyboard() -> dict:
 
 def create_count_keyboard() -> dict:
     buttons = []
-    for count in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+    row = []
+    for count in [1, 2, 3, 4, 5]:
+        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    for count in [6, 7, 8, 9, 10]:
         buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
     buttons.append({'text': '✅ CONFERMA', 'callback_data': 'count_confirm'})
     return create_inline_keyboard(buttons)
@@ -610,15 +629,14 @@ def create_count_keyboard() -> dict:
 def handle_start(chat_id: str):
     user_states[chat_id] = {'step': 'start', 'selected_family': None, 'selected_days': 3, 'selected_count': 5}
     
-    text = """🤖 *GesssAI-Pro Bot*
+    text = """🤖 *GesssAI-Pro*
 
-Benvenuto! Scegli una famiglia di giocate e ti mostrerò le migliori partite.
+🇮🇹 Scegli una famiglia e ti mostro le migliori 2 giocate per ogni partita!
 
-*📋 Come funziona:*
-
-1️⃣ *Scegli 1 famiglia* di giocate
-2️⃣ *Scegli il range di giorni* (1-5)
-3️⃣ *Scegli quante partite* vedere (1-10)"""
+*Passaggi:*
+1️⃣ Scegli *1 famiglia*
+2️⃣ Scegli *range giorni* (1-5)
+3️⃣ Scegli *quante partite* (1-10)"""
     
     keyboard = create_inline_keyboard([{'text': '🎯 INIZIA', 'callback_data': 'start_setup'}])
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
@@ -631,7 +649,7 @@ def handle_start_setup(chat_id: str):
     state['step'] = 'selecting_family'
     state['selected_family'] = None
     
-    text = """🎯 *Scegli una famiglia di giocate*
+    text = """🎯 *Scegli una famiglia*
 
 Clicca su una famiglia per selezionarla."""
     
@@ -645,9 +663,9 @@ def handle_family_selection(chat_id: str, family_id: str):
     state = user_states[chat_id]
     state['selected_family'] = family_id
     
-    text = f"""✅ *Famiglia selezionata: {FAMIGLIE_GIOCATE[family_id]['label']}*
+    text = f"""✅ *{FAMIGLIE_GIOCATE[family_id]['label']}*
 
-Ora scegli il *range di giorni* (1-5)."""
+Ora scegli i *giorni* (1-5)."""
     
     keyboard = create_days_keyboard()
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
@@ -660,10 +678,10 @@ def handle_days_selection(chat_id: str, days: int):
     state['selected_days'] = days
     state['step'] = 'selecting_count'
     
-    text = f"""📅 *Range giorni: {days} giorni*
+    text = f"""📅 *{days} giorni*
 Famiglia: {FAMIGLIE_GIOCATE[state['selected_family']]['label']}
 
-Scegli *quante partite* vedere (1-10)."""
+Scegli *partite* (1-10)."""
     
     keyboard = create_count_keyboard()
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
@@ -675,20 +693,20 @@ def handle_count_selection(chat_id: str, count: int):
     state = user_states[chat_id]
     state['selected_count'] = count
     
-    send_message(chat_id, "⏳ *Caricamento dati in corso...*", parse_mode='Markdown')
+    send_message(chat_id, "⏳ *Caricamento...*", parse_mode='Markdown')
     
     try:
         df = load_excel_from_github()
         if df is None:
-            send_message(chat_id, "❌ *Errore:* Impossibile caricare il file Excel.")
+            send_message(chat_id, "❌ *Errore:* File Excel non trovato.")
             return
         
         matches = parse_matches_from_excel(df)
         if not matches:
-            send_message(chat_id, "❌ *Errore:* Nessuna partita trovata nel file.")
+            send_message(chat_id, "❌ *Errore:* Nessuna partita.")
             return
         
-        logger.info(f"📊 Caricate {len(matches)} partite totali")
+        logger.info(f"📊 Caricate {len(matches)} partite")
         
         analyses = analyze_matches(matches, state['selected_family'], state['selected_days'])
         
@@ -706,12 +724,12 @@ def handle_count_selection(chat_id: str, count: int):
             send_message(chat_id, report, parse_mode='Markdown')
         
         keyboard = create_inline_keyboard([
-            {'text': '🔄 NUOVA RICERCA', 'callback_data': 'new_search'}
+            {'text': '🔄 NUOVA', 'callback_data': 'new_search'}
         ])
-        send_message(chat_id, "✅ *Analisi completata!*", parse_mode='Markdown', reply_markup=keyboard)
+        send_message(chat_id, "✅ *Completato!*", parse_mode='Markdown', reply_markup=keyboard)
         
     except Exception as e:
-        error_msg = f"❌ *Errore:* {str(e)}"
+        error_msg = f"❌ *Errore:* {str(e)[:100]}"
         logger.error(f"Errore: {e}")
         send_message(chat_id, error_msg, parse_mode='Markdown')
 
@@ -735,7 +753,6 @@ def webhook():
         if not data:
             return jsonify({'status': 'ok'})
         
-        # Messaggi
         if 'message' in data:
             message = data['message']
             chat_id = str(message['chat']['id'])
@@ -744,9 +761,8 @@ def webhook():
             if text == '/start':
                 handle_start(chat_id)
             else:
-                send_message(chat_id, "❓ Usa /start per iniziare")
+                send_message(chat_id, "❓ Usa /start")
         
-        # Callback
         elif 'callback_query' in data:
             callback = data['callback_query']
             chat_id = str(callback['message']['chat']['id'])
@@ -766,7 +782,7 @@ def webhook():
                 if chat_id in user_states and user_states[chat_id].get('selected_count'):
                     handle_count_selection(chat_id, user_states[chat_id]['selected_count'])
                 else:
-                    send_message(chat_id, "⚠️ Seleziona prima il numero di partite!")
+                    send_message(chat_id, "⚠️ Scegli prima il numero!")
             elif callback_data.startswith('fam_'):
                 family_id = callback_data[4:]
                 if family_id in FAMIGLIE_GIOCATE:
@@ -779,11 +795,11 @@ def webhook():
                 if chat_id in user_states:
                     state = user_states[chat_id]
                     state['selected_count'] = count
-                    text = f"""🔢 *Numero partite: {count}*
+                    text = f"""🔢 *{count} partite*
 Famiglia: {FAMIGLIE_GIOCATE[state['selected_family']]['label']}
-Range giorni: {state['selected_days']} giorni
+Giorni: {state['selected_days']}
 
-Clicca su un numero per cambiare, poi *✅ CONFERMA*"""
+Premi *✅ CONFERMA*"""
                     keyboard = create_count_keyboard()
                     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
         
