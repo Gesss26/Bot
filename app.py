@@ -549,7 +549,7 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
     
     return 0
 
-def get_best_bets_for_family(family_id: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None, limit: int = 2) -> List[Dict]:
+def get_best_bets_for_family(family_id: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None, limit: int = 1) -> List[Dict]:
     """Restituisce le migliori N giocate per una famiglia"""
     family = FAMIGLIE_GIOCATE.get(family_id)
     if not family:
@@ -582,9 +582,9 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
         home_form = calc_form_and_stats(matches, match.casa)
         away_form = calc_form_and_stats(matches, match.ospiti)
         
-        giocate_per_famiglia = {}
+        giocate = []
         
-        # Per OGNI famiglia selezionata, prendi le migliori 2 giocate
+        # Per OGNI famiglia selezionata, prendi la migliore giocata
         for family_id in family_ids:
             family = FAMIGLIE_GIOCATE.get(family_id)
             if not family:
@@ -597,76 +597,37 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
                     stats, 
                     home_media_gol=home_form['media_gol_fatti'],
                     away_media_gol=away_form['media_gol_fatti'],
-                    limit=2
+                    limit=1
                 )
                 for bet in best_bets:
-                    if family_id not in giocate_per_famiglia:
-                        giocate_per_famiglia[family_id] = []
-                    giocate_per_famiglia[family_id].append(Giocata(
+                    giocate.append(Giocata(
                         famiglia=family['label'],
                         label=bet['giocata'],
                         pct=bet['pct'],
                         is_bomb=bet['pct'] >= 90
                     ))
             else:
-                best_bets = get_best_bets_for_family(family_id, stats, limit=2)
+                best_bets = get_best_bets_for_family(family_id, stats, limit=1)
                 for bet in best_bets:
-                    if family_id not in giocate_per_famiglia:
-                        giocate_per_famiglia[family_id] = []
-                    giocate_per_famiglia[family_id].append(Giocata(
+                    giocate.append(Giocata(
                         famiglia=family['label'],
                         label=bet['giocata'],
                         pct=bet['pct'],
                         is_bomb=bet['pct'] >= 90
                     ))
         
-        # Se non ci sono giocate, salta
-        if not giocate_per_famiglia:
+        if not giocate:
             continue
         
-        # Costruisci la lista finale: prendi la migliore di ogni famiglia
-        final_giocate = []
-        
-        # Prima prendi la migliore di ogni famiglia
-        for family_id in family_ids:
-            if family_id in giocate_per_famiglia and giocate_per_famiglia[family_id]:
-                final_giocate.append(giocate_per_famiglia[family_id][0])
-        
-        # Poi aggiungi la seconda migliore della famiglia che ha la percentuale più alta
-        # (ma solo se abbiamo meno di 3 giocate totali)
-        if len(final_giocate) < 3:
-            best_second = None
-            best_second_pct = -1
-            for family_id in family_ids:
-                if family_id in giocate_per_famiglia and len(giocate_per_famiglia[family_id]) > 1:
-                    second = giocate_per_famiglia[family_id][1]
-                    if second.pct > best_second_pct:
-                        best_second = second
-                        best_second_pct = second.pct
-            if best_second:
-                final_giocate.append(best_second)
-        
-        # Se ancora non abbiamo 3 giocate, continua ad aggiungere
-        if len(final_giocate) < 3:
-            for family_id in family_ids:
-                if family_id in giocate_per_famiglia:
-                    for g in giocate_per_famiglia[family_id]:
-                        if len(final_giocate) >= 3:
-                            break
-                        if g not in final_giocate:
-                            final_giocate.append(g)
-                    if len(final_giocate) >= 3:
-                        break
-        
         # Ordina per percentuale
-        final_giocate.sort(key=lambda x: x.pct, reverse=True)
+        giocate.sort(key=lambda x: x.pct, reverse=True)
         
-        score = round(sum(g.pct for g in final_giocate) / len(final_giocate))
-        has_bomb = any(g.is_bomb for g in final_giocate)
+        score = round(sum(g.pct for g in giocate) / len(giocate))
+        has_bomb = any(g.is_bomb for g in giocate)
         
         results.append(MatchAnalysis(
             match=match,
-            giocate=final_giocate,
+            giocate=giocate,
             score=score,
             has_bomb=has_bomb,
             home_form=home_form,
@@ -708,11 +669,13 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         
         lines.append(f"📊 {match.casa}")
         lines.append(f"{analysis.home_form['form_pallini']} = {analysis.home_form['pct']}%")
+        lines.append("")  # Riga vuota tra stato forma e media gol
         lines.append(f"⚽️ Media gol: {analysis.home_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.home_form['media_gol_fatti'])}")
         lines.append("")
         
         lines.append(f"📊 {match.ospiti}")
         lines.append(f"{analysis.away_form['form_pallini']} = {analysis.away_form['pct']}%")
+        lines.append("")  # Riga vuota tra stato forma e media gol
         lines.append(f"⚽️ Media gol: {analysis.away_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.away_form['media_gol_fatti'])}")
         lines.append("")
         
@@ -778,10 +741,12 @@ def create_inline_keyboard(buttons: List[Dict[str, str]]) -> dict:
         keyboard.append(row)
     return {'inline_keyboard': keyboard}
 
-def create_family_keyboard(selected: str = None) -> dict:
+def create_family_keyboard(selected: List[str] = None) -> dict:
+    if selected is None:
+        selected = []
     buttons = []
     for family_id, label in FAMIGLIE_LIST:
-        if family_id == selected:
+        if family_id in selected:
             label = f"✅ {label}"
         buttons.append({'text': label, 'callback_data': f"fam_{family_id}"})
     return create_inline_keyboard(buttons)
@@ -805,27 +770,27 @@ def create_count_keyboard() -> dict:
     return create_inline_keyboard(buttons)
 
 # ============================================================
-# GESTIONE COMANDI
+# GESTIONE COMANDI - ORA CON 3 GIOCATE
 # ============================================================
 
 def handle_start(chat_id: str):
     user_states[chat_id] = {
         'step': 'start',
-        'giocata1': None,
-        'giocata2': None,
+        'giocate': [],  # Lista di 3 giocate
         'selected_days': 3,
         'selected_count': 5
     }
     
     text = """🤖 *GesssAI-Pro*
 
-🇮🇹 Scegli 2 famiglie di giocate!
+🇮🇹 Scegli 3 famiglie di giocate!
 
 *Passaggi:*
 1️⃣ Scegli *Giocata 1*
 2️⃣ Scegli *Giocata 2*
-3️⃣ Scegli *range giorni* (1-5)
-4️⃣ Scegli *quante partite* (1-10)"""
+3️⃣ Scegli *Giocata 3*
+4️⃣ Scegli *range giorni* (1-5)
+5️⃣ Scegli *quante partite* (1-10)"""
     
     keyboard = create_inline_keyboard([{'text': '🎯 INIZIA', 'callback_data': 'start_setup'}])
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
@@ -834,18 +799,16 @@ def handle_start_setup(chat_id: str):
     if chat_id not in user_states:
         user_states[chat_id] = {
             'step': 'selecting_giocata1',
-            'giocata1': None,
-            'giocata2': None,
+            'giocate': [],
             'selected_days': 3,
             'selected_count': 5
         }
     
     state = user_states[chat_id]
     state['step'] = 'selecting_giocata1'
-    state['giocata1'] = None
-    state['giocata2'] = None
+    state['giocate'] = []
     
-    text = """🎯 *Giocata 1*
+    text = """🎯 *Giocata 1 (di 3)*
 
 Scegli la prima famiglia di giocate."""
     
@@ -858,29 +821,40 @@ def handle_family_selection(chat_id: str, family_id: str):
     
     state = user_states[chat_id]
     
+    # Se la famiglia è già stata scelta, non permettere duplicati
+    if family_id in state['giocate']:
+        send_message(chat_id, "⚠️ Hai già scelto questa famiglia! Scegline un'altra.")
+        return
+    
+    state['giocate'].append(family_id)
+    
     if state['step'] == 'selecting_giocata1':
-        state['giocata1'] = family_id
         state['step'] = 'selecting_giocata2'
-        
         text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[family_id]['label']}*
 
-🎯 *Giocata 2*
+🎯 *Giocata 2 (di 3)*
 
 Scegli la seconda famiglia di giocate."""
-        
-        keyboard = create_family_keyboard()
+        keyboard = create_family_keyboard(state['giocate'])
         send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
     
     elif state['step'] == 'selecting_giocata2':
-        if family_id == state['giocata1']:
-            send_message(chat_id, "⚠️ Hai già scelto questa famiglia per la Giocata 1! Scegline un'altra.")
-            return
-        
-        state['giocata2'] = family_id
+        state['step'] = 'selecting_giocata3'
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*
+✅ *Giocata 2: {FAMIGLIE_GIOCATE[family_id]['label']}*
+
+🎯 *Giocata 3 (di 3)*
+
+Scegli la terza famiglia di giocate."""
+        keyboard = create_family_keyboard(state['giocate'])
+        send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
+    
+    elif state['step'] == 'selecting_giocata3':
         state['step'] = 'selecting_days'
         
-        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}*
-✅ *Giocata 2: {FAMIGLIE_GIOCATE[family_id]['label']}*
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*
+✅ *Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}*
+✅ *Giocata 3: {FAMIGLIE_GIOCATE[family_id]['label']}*
 
 📅 Ora scegli il *range di giorni* (1-5)."""
         
@@ -897,8 +871,9 @@ def handle_days_selection(chat_id: str, days: int):
     
     text = f"""📅 *Range giorni: {days} giorni*
 
-Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}
-Giocata 2: {FAMIGLIE_GIOCATE[state['giocata2']]['label']}
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
+Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
 
 🔢 Scegli *quante partite* vedere (1-10)."""
     
@@ -915,8 +890,9 @@ def handle_count_selection(chat_id: str, count: int):
     # Mostra riepilogo
     text = f"""📋 *RIEPILOGO*
 
-Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}
-Giocata 2: {FAMIGLIE_GIOCATE[state['giocata2']]['label']}
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
+Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
 📅 Giorni: {state['selected_days']}
 🔢 Partite: {count}
 
@@ -949,7 +925,7 @@ def handle_confirm_analysis(chat_id: str):
         
         logger.info(f"📊 Caricate {len(matches)} partite")
         
-        family_ids = [state['giocata1'], state['giocata2']]
+        family_ids = state['giocate']  # Ora ha 3 famiglie
         analyses = analyze_matches(matches, family_ids, state['selected_days'])
         
         if not analyses:
@@ -982,8 +958,7 @@ def handle_new_search(chat_id: str):
     if chat_id in user_states:
         user_states[chat_id] = {
             'step': 'start',
-            'giocata1': None,
-            'giocata2': None,
+            'giocate': [],
             'selected_days': 3,
             'selected_count': 5
         }
@@ -1055,8 +1030,9 @@ def webhook():
                     state['selected_count'] = count
                     text = f"""📋 *RIEPILOGO*
 
-Giocata 1: {FAMIGLIE_GIOCATE[state['giocata1']]['label']}
-Giocata 2: {FAMIGLIE_GIOCATE[state['giocata2']]['label']}
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
+Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
 📅 Giorni: {state['selected_days']}
 🔢 Partite: {count}
 
