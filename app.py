@@ -1,5 +1,6 @@
+from flask import Flask, request, jsonify
 import requests
-import time
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
@@ -7,8 +8,14 @@ from dataclasses import dataclass
 import pandas as pd
 from io import BytesIO
 import re
-import json
+import time
 import traceback
+
+# ============================================================
+# CREAZIONE APP FLASK - DEVE ESSERE LA PRIMA COSA DOPO GLI IMPORT
+# ============================================================
+
+app = Flask(__name__)
 
 # ============================================================
 # CONFIGURAZIONE
@@ -22,10 +29,7 @@ SPLASH_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/maste
 # LOGGING
 # ============================================================
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -56,8 +60,9 @@ class Giocata:
 @dataclass
 class MatchAnalysis:
     match: Match
-    giocata: Giocata
+    giocate: List[Giocata]
     score: int
+    has_bomb: bool
     home_form: Dict
     away_form: Dict
 
@@ -74,9 +79,9 @@ FAMIGLIE_GIOCATE = {
     'under': {'id': 'under', 'label': '⬇️ Under', 'options': ['Under 1.5', 'Under 2.5', 'Under 3.5', 'Under 4.5']},
     'dc_under': {'id': 'dc_under', 'label': '🔗 DC+Under', 'options': ['1X+U1.5', '12+U1.5', 'X2+U1.5', '1X+U2.5', '12+U2.5', 'X2+U2.5', '1X+U3.5', '12+U3.5', 'X2+U3.5', '1X+U4.5', '12+U4.5', 'X2+U4.5']},
     'dc_over': {'id': 'dc_over', 'label': '🔗 DC+Over', 'options': ['1X+O1.5', '12+O1.5', 'X2+O1.5', '1X+O2.5', '12+O2.5', 'X2+O2.5', '1X+O3.5', '12+O3.5', 'X2+O3.5', '1X+O4.5', '12+O4.5', 'X2+O4.5']},
-    'multigol': {'id': 'multigol', 'label': '📊 Multigol Totale', 'options': ['0-2', '1-3', '1-4', '2-5']},
-    'mg_casa_ospite': {'id': 'mg_casa_ospite', 'label': '⚔️ MG Casa+Ospite', 'options': ['0-1+0-1', '0-1+0-2', '0-1+1-3', '0-1+2-5', '0-2+0-1', '0-2+0-2', '0-2+1-3', '0-2+2-5', '1-3+0-1', '1-3+0-2', '1-3+1-3', '1-3+2-5', '2-5+0-1', '2-5+0-2', '2-5+1-3', '2-5+2-5']},
-    'dc_multigol': {'id': 'dc_multigol', 'label': '🔗 DC+Multigol', 'options': ['1X+0-2', '12+0-2', 'X2+0-2', '1X+1-3', '12+1-3', 'X2+1-3', '1X+1-4', '12+1-4', 'X2+1-4', '1X+2-5', '12+2-5', 'X2+2-5']}
+    'multigol': {'id': 'multigol', 'label': '📊 Multigol Totale', 'options': ['0-2', '1-3', '2-5']},
+    'mg_casa_ospite': {'id': 'mg_casa_ospite', 'label': '⚔️ MG Casa+Ospite', 'options': ['0-2+0-2', '0-2+1-3', '0-2+2-5', '1-3+0-2', '1-3+1-3', '1-3+2-5', '2-5+0-2', '2-5+1-3', '2-5+2-5']},
+    'dc_multigol': {'id': 'dc_multigol', 'label': '🔗 DC+Multigol', 'options': ['1X+0-2', '12+0-2', 'X2+0-2', '1X+1-3', '12+1-3', 'X2+1-3', '1X+2-5', '12+2-5', 'X2+2-5']}
 }
 
 FAMIGLIE_LIST = [
@@ -136,19 +141,37 @@ def get_today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 # ============================================================
-# CARICAMENTO DATI DAL FILE EXCEL
+# FUNZIONI PER MULTIGOL
+# ============================================================
+
+def get_multigol_range(media_gol: float) -> str:
+    if media_gol <= 1.0:
+        return "0-2"
+    elif media_gol <= 2.5:
+        return "1-3"
+    else:
+        return "2-5"
+
+def get_multigol_total_range(media_home: float, media_away: float) -> str:
+    media_totale = media_home + media_away
+    if media_totale <= 2.0:
+        return "0-2"
+    elif media_totale <= 4.0:
+        return "1-3"
+    else:
+        return "2-5"
+
+# ============================================================
+# CARICAMENTO DATI
 # ============================================================
 
 def load_excel_from_github() -> Optional[pd.DataFrame]:
-    """Carica il file Excel dal repository GitHub"""
     try:
         logger.info(f"📂 Caricamento Excel da: {EXCEL_URL}")
         response = requests.get(EXCEL_URL, timeout=30)
-        
         if response.status_code != 200:
             logger.error(f"❌ HTTP {response.status_code}")
             return None
-            
         df = pd.read_excel(BytesIO(response.content))
         logger.info(f"✅ Caricate {len(df)} righe")
         return df
@@ -262,7 +285,14 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
     team_matches = [m for m in matches if m.stato == "Giocata" and (m.casa == team_name or m.ospiti == team_name)]
     
     if not team_matches:
-        return {'form': '-----', 'pct': 50, 'media_gol_fatti': 0, 'media_gol_subiti': 0, 'partite': 0}
+        return {
+            'form': '-----', 
+            'pct': 50, 
+            'media_gol_fatti': 0, 
+            'media_gol_subiti': 0, 
+            'partite': 0,
+            'form_pallini': '🔘🔘🔘🔘🔘'
+        }
     
     team_matches.sort(key=lambda m: m.data, reverse=True)
     team_matches = team_matches[:5]
@@ -288,8 +318,21 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form += 'S'
     
+    form_pallini = ''
+    for f in form:
+        if f == 'V':
+            form_pallini += '🟢'
+        elif f == 'P':
+            form_pallini += '🟡'
+        else:
+            form_pallini += '🔴'
+    
+    while len(form_pallini) < 5:
+        form_pallini += '🔘'
+    
     return {
         'form': form or '-----',
+        'form_pallini': form_pallini,
         'pct': round((points / (len(team_matches) * 3)) * 100) if team_matches else 50,
         'media_gol_fatti': round(gol_fatti / len(team_matches), 1) if team_matches else 0,
         'media_gol_subiti': round(gol_subiti / len(team_matches), 1) if team_matches else 0,
@@ -368,11 +411,7 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
         'total_games': total
     }
 
-# ============================================================
-# CALCOLO GIOCATA
-# ============================================================
-
-def get_giocata_pct(giocata: str, stats: Dict) -> int:
+def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None) -> int:
     if stats.get('error'):
         return 0
     
@@ -386,6 +425,67 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     ng = stats.get('ng', 0)
     under_over = stats.get('under_over', [])
     
+    # MG CASA+OSPITE
+    if '+' in giocata and '-' in giocata:
+        parts = giocata.split('+')
+        if len(parts) == 2 and '-' in parts[0] and '-' in parts[1]:
+            if home_media_gol is not None and away_media_gol is not None:
+                home_range = get_multigol_range(home_media_gol)
+                away_range = get_multigol_range(away_media_gol)
+                expected = f"{home_range}+{away_range}"
+                
+                if giocata == expected:
+                    return 90
+                
+                h1, h2 = giocata.split('+')[0].split('-')
+                a1, a2 = giocata.split('+')[1].split('-')
+                eh1, eh2 = home_range.split('-')
+                ea1, ea2 = away_range.split('-')
+                
+                diff = (abs(int(h1)-int(eh1)) + abs(int(h2)-int(eh2)) + 
+                       abs(int(a1)-int(ea1)) + abs(int(a2)-int(ea2)))
+                
+                if diff == 0:
+                    return 90
+                elif diff <= 2:
+                    return 80
+                elif diff <= 4:
+                    return 65
+                elif diff <= 6:
+                    return 50
+                else:
+                    return 35
+        return 50
+    
+    # MULTIGOL TOTALE
+    if giocata in ['0-2', '1-3', '2-5']:
+        if home_media_gol is not None and away_media_gol is not None:
+            expected = get_multigol_total_range(home_media_gol, away_media_gol)
+            if giocata == expected:
+                return 85
+            g1, g2 = giocata.split('-')
+            e1, e2 = expected.split('-')
+            diff = abs(int(g1)-int(e1)) + abs(int(g2)-int(e2))
+            if diff <= 2:
+                return 70
+            elif diff <= 4:
+                return 50
+            else:
+                return 30
+        return 50
+    
+    # DC+MULTIGOL
+    if giocata.startswith('1X+') and giocata[3:] in ['0-2', '1-3', '2-5']:
+        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
+        return round((p1X + multigol_pct) / 2)
+    if giocata.startswith('12+') and giocata[3:] in ['0-2', '1-3', '2-5']:
+        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
+        return round((p12 + multigol_pct) / 2)
+    if giocata.startswith('X2+') and giocata[3:] in ['0-2', '1-3', '2-5']:
+        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
+        return round((pX2 + multigol_pct) / 2)
+    
+    # GIOCATE STANDARD
     if giocata == '1':
         return p1
     if giocata == 'X':
@@ -415,6 +515,7 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     if giocata == 'Under 4.5':
         return under_over[3]['under'] if len(under_over) > 3 else 0
     
+    # DC+UNDER/OVER
     if giocata.startswith('1X+O'):
         over = giocata.replace('1X+O', 'Over ')
         return round((p1X + get_giocata_pct(over, stats)) / 2)
@@ -424,7 +525,6 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     if giocata.startswith('X2+O'):
         over = giocata.replace('X2+O', 'Over ')
         return round((pX2 + get_giocata_pct(over, stats)) / 2)
-    
     if giocata.startswith('1X+U'):
         under = giocata.replace('1X+U', 'Under ')
         return round((p1X + get_giocata_pct(under, stats)) / 2)
@@ -437,35 +537,29 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     
     return 0
 
-def get_best_bet_for_family(family_id: str, stats: Dict) -> Optional[Dict]:
+def get_best_bets_for_family(family_id: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None, limit: int = 1) -> List[Dict]:
     family = FAMIGLIE_GIOCATE.get(family_id)
     if not family:
-        return None
+        return []
     
-    best = None
-    best_pct = -1
-    
+    results = []
     for opt in family['options']:
-        pct = get_giocata_pct(opt, stats)
-        if pct > best_pct:
-            best_pct = pct
-            best = {'giocata': opt, 'pct': pct}
+        pct = get_giocata_pct(opt, stats, home_media_gol, away_media_gol)
+        if pct > 0:
+            results.append({'giocata': opt, 'pct': pct})
     
-    if best and best['pct'] > 0:
-        return {
-            'giocata': best['giocata'],
-            'pct': best['pct'],
-            'is_bomb': best['pct'] >= 90,
-            'family_label': family['label']
-        }
-    
-    return None
+    results.sort(key=lambda x: x['pct'], reverse=True)
+    return results[:limit]
 
-def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> List[MatchAnalysis]:
+def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int) -> List[MatchAnalysis]:
     future_matches = [m for m in matches if m.stato == "Futura"]
     today = get_today_str()
     limit_date = (datetime.now() + timedelta(days=days_range)).strftime("%Y-%m-%d")
-    future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
+    
+    if days_range == 1:
+        future_matches = [m for m in future_matches if m.data == today]
+    else:
+        future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
     
     logger.info(f"🔍 Trovate {len(future_matches)} partite future fino al {limit_date}")
     
@@ -479,21 +573,51 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
         home_form = calc_form_and_stats(matches, match.casa)
         away_form = calc_form_and_stats(matches, match.ospiti)
         
-        best = get_best_bet_for_family(family_id, stats)
-        if not best:
+        giocate = []
+        
+        for family_id in family_ids:
+            family = FAMIGLIE_GIOCATE.get(family_id)
+            if not family:
+                continue
+            
+            if family_id in ['mg_casa_ospite', 'multigol', 'dc_multigol']:
+                best_bets = get_best_bets_for_family(
+                    family_id, 
+                    stats, 
+                    home_media_gol=home_form['media_gol_fatti'],
+                    away_media_gol=away_form['media_gol_fatti'],
+                    limit=1
+                )
+                for bet in best_bets:
+                    giocate.append(Giocata(
+                        famiglia=family['label'],
+                        label=bet['giocata'],
+                        pct=bet['pct'],
+                        is_bomb=bet['pct'] >= 90
+                    ))
+            else:
+                best_bets = get_best_bets_for_family(family_id, stats, limit=1)
+                for bet in best_bets:
+                    giocate.append(Giocata(
+                        famiglia=family['label'],
+                        label=bet['giocata'],
+                        pct=bet['pct'],
+                        is_bomb=bet['pct'] >= 90
+                    ))
+        
+        if not giocate:
             continue
         
-        giocata = Giocata(
-            famiglia=best['family_label'],
-            label=best['giocata'],
-            pct=best['pct'],
-            is_bomb=best['is_bomb']
-        )
+        giocate.sort(key=lambda x: x.pct, reverse=True)
+        
+        score = round(sum(g.pct for g in giocate) / len(giocate))
+        has_bomb = any(g.is_bomb for g in giocate)
         
         results.append(MatchAnalysis(
             match=match,
-            giocata=giocata,
-            score=best['pct'],
+            giocate=giocate,
+            score=score,
+            has_bomb=has_bomb,
             home_form=home_form,
             away_form=away_form
         ))
@@ -503,11 +627,80 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
     return results
 
 # ============================================================
-# INVIO MESSAGGI TELEGRAM
+# GENERAZIONE REPORT
 # ============================================================
 
-def send_telegram_message(chat_id: str, text: str, parse_mode: str = 'HTML', reply_markup: dict = None) -> bool:
-    """Invia un messaggio e restituisce True se ha successo"""
+def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
+    if not analyses:
+        return "📅 Nessuna partita trovata nei giorni selezionati."
+    
+    top = analyses[:count]
+    
+    lines = []
+    lines.append("📊 *GesssAI-Pro*")
+    lines.append(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    lines.append(f"🏟️ {len(top)} partite")
+    lines.append("")
+    lines.append("─" * 25)
+    lines.append("")
+    
+    for i, analysis in enumerate(top, 1):
+        match = analysis.match
+        giocate = analysis.giocate
+        
+        lines.append(f"*#{i} {match.campionato}*")
+        lines.append(f"📅 {format_date_eu(match.data)} {match.ora}")
+        lines.append("")
+        lines.append(f"🏠 {match.casa}")
+        lines.append(f"✈️ {match.ospiti}")
+        lines.append("")
+        
+        lines.append(f"📊 {match.casa}")
+        lines.append(f"{analysis.home_form['form_pallini']} = {analysis.home_form['pct']}%")
+        lines.append("")
+        lines.append(f"⚽️ Media gol: {analysis.home_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.home_form['media_gol_fatti'])}")
+        lines.append("")
+        
+        lines.append(f"📊 {match.ospiti}")
+        lines.append(f"{analysis.away_form['form_pallini']} = {analysis.away_form['pct']}%")
+        lines.append("")
+        lines.append(f"⚽️ Media gol: {analysis.away_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.away_form['media_gol_fatti'])}")
+        lines.append("")
+        
+        lines.append(f"⚽️ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
+        lines.append("")
+        
+        for g in giocate:
+            if g.pct >= 90:
+                emoji = '💣'
+            elif g.pct >= 67:
+                emoji = '🟢'
+            elif g.pct >= 34:
+                emoji = '🟡'
+            else:
+                emoji = '🔴'
+            
+            bomb = ' 💣' if g.is_bomb else ''
+            lines.append(f"🎯 {g.famiglia}: {g.label} {emoji} *{g.pct}%*{bomb}")
+        
+        lines.append("")
+        lines.append(f"📊 Score: *{analysis.score}%*")
+        
+        if analysis.has_bomb:
+            lines.append("💣 *BOMBA!*")
+        
+        if i < len(top):
+            lines.append("")
+            lines.append("─" * 25)
+            lines.append("")
+    
+    return "\n".join(lines)
+
+# ============================================================
+# FUNZIONI TELEGRAM
+# ============================================================
+
+def send_message(chat_id: str, text: str, parse_mode: str = 'Markdown', reply_markup: dict = None) -> bool:
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
     if reply_markup:
@@ -529,17 +722,19 @@ def create_inline_keyboard(buttons: List[Dict[str, str]]) -> dict:
     row = []
     for button in buttons:
         row.append({'text': button['text'], 'callback_data': button['callback_data']})
-        if len(row) == 3:
+        if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
     return {'inline_keyboard': keyboard}
 
-def create_family_keyboard(selected: str = None) -> dict:
+def create_family_keyboard(selected: List[str] = None) -> dict:
+    if selected is None:
+        selected = []
     buttons = []
     for family_id, label in FAMIGLIE_LIST:
-        if family_id == selected:
+        if family_id in selected:
             label = f"✅ {label}"
         buttons.append({'text': label, 'callback_data': f"fam_{family_id}"})
     return create_inline_keyboard(buttons)
@@ -552,84 +747,27 @@ def create_days_keyboard() -> dict:
 
 def create_count_keyboard() -> dict:
     buttons = []
-    for count in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+    for count in [1, 2, 3]:
         buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    for count in [4, 5, 6]:
+        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    for count in [7, 8, 9]:
+        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    buttons.append({'text': '10', 'callback_data': 'count_10'})
     buttons.append({'text': '✅ CONFERMA', 'callback_data': 'count_confirm'})
     return create_inline_keyboard(buttons)
-
-# ============================================================
-# GENERAZIONE REPORT
-# ============================================================
-
-def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
-    """Genera il report in formato HTML per Telegram"""
-    if not analyses:
-        return "<b>📅 Nessuna partita trovata nei giorni selezionati.</b>"
-    
-    top = analyses[:count]
-    
-    lines = []
-    lines.append("📊 <b>GesssAI-Pro - Report Partite</b>")
-    lines.append(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    lines.append(f"🏟️ {len(top)} partite su {len(analyses)} trovate")
-    lines.append("")
-    lines.append("━" * 30)
-    lines.append("")
-    
-    for i, analysis in enumerate(top, 1):
-        match = analysis.match
-        g = analysis.giocata
-        
-        # Colore in base alla percentuale
-        if g.pct >= 90:
-            color = '#f39c12'
-            emoji = '💣'
-        elif g.pct >= 67:
-            color = '#6fcf97'
-            emoji = '🟢'
-        elif g.pct >= 34:
-            color = '#8b949e'
-            emoji = '⚪'
-        else:
-            color = '#eb5757'
-            emoji = '🔴'
-        
-        bomb = ' 💣' if g.is_bomb else ''
-        
-        lines.append(f"<b>#{i} - {match.campionato}</b>")
-        lines.append(f"📅 {format_date_eu(match.data)} - ⏰ {match.ora}")
-        lines.append(f"<b>⚔️ {match.casa} vs {match.ospiti}</b>")
-        lines.append(f"📊 Forma: {match.casa} {format_form(analysis.home_form['form'])} ({analysis.home_form['pct']}%) | {match.ospiti} {format_form(analysis.away_form['form'])} ({analysis.away_form['pct']}%)")
-        lines.append(f"⚽ xG: {match.casa} {analysis.home_form['media_gol_fatti']} | {match.ospiti} {analysis.away_form['media_gol_fatti']}")
-        lines.append("")
-        lines.append(f"🎯 <b>{g.famiglia}</b>: {g.label} {emoji} <b><font color='{color}'>{g.pct}%</font></b>{bomb}")
-        lines.append(f"📊 Score: {analysis.score}%")
-        
-        if i < len(top):
-            lines.append("")
-            lines.append("─" * 30)
-            lines.append("")
-    
-    return "\n".join(lines)
-
-def format_form(form: str) -> str:
-    if not form:
-        return '❌'
-    return ''.join(['✅' if f == 'V' else '➖' if f == 'P' else '❌' for f in form])
 
 # ============================================================
 # FUNZIONI SPLASHSCREEN
 # ============================================================
 
 def send_splashscreen(chat_id: str):
-    """Invia lo splashscreen con immagine"""
-    
     caption = """🚀 *GESSsAI-PRO* 🚀
 
 ⚽ *Benvenuto nel Bot di Analisi Calcio!*
 
 💡 *Come funziona:*
-1️⃣ Scegli 1 famiglia di giocate
+1️⃣ Scegli 3 famiglie di giocate
 2️⃣ Seleziona il periodo (1-5 giorni)
 3️⃣ Ricevi le previsioni con percentuali
 
@@ -652,7 +790,7 @@ def send_splashscreen(chat_id: str):
                 {'text': 'ℹ️ INFO', 'callback_data': 'show_info'}
             ])
             
-            send_telegram_message(
+            send_message(
                 chat_id, 
                 "✨ *Cosa vuoi fare?*", 
                 parse_mode='Markdown', 
@@ -667,8 +805,6 @@ def send_splashscreen(chat_id: str):
         send_splashscreen_text(chat_id)
 
 def send_splashscreen_text(chat_id: str):
-    """Versione testuale dello splashscreen (fallback)"""
-    
     splash_text = """🚀 *GESSsAI-PRO* 🚀
 
 ╔════════════════════════════════╗
@@ -679,7 +815,7 @@ def send_splashscreen_text(chat_id: str):
 ║   🎯 *Previsioni Accurate*    ║
 ║                                ║
 ║   💡 *Come funziona:*          ║
-║   1️⃣ Scegli 1 famiglia di giocate ║
+║   1️⃣ Scegli 3 famiglie di giocate ║
 ║   2️⃣ Seleziona il periodo     ║
 ║   3️⃣ Ricevi le previsioni     ║
 ║                                ║
@@ -694,11 +830,9 @@ def send_splashscreen_text(chat_id: str):
         {'text': 'ℹ️ INFO', 'callback_data': 'show_info'}
     ])
     
-    send_telegram_message(chat_id, splash_text, parse_mode='Markdown', reply_markup=keyboard)
+    send_message(chat_id, splash_text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_info(chat_id: str):
-    """Mostra informazioni sul bot"""
-    
     info_text = """ℹ️ *GESSsAI-PRO - Info*
 
 📌 *Cos'è GESSsAI-PRO?*
@@ -720,11 +854,12 @@ Basate su:
 • Forma delle squadre (ultime 5 partite)
 • Media gol fatti/subiti
 • Statistiche storiche
+• Fattori di contesto
 
 💣 *BOMBA!* = Giocata con % ≥ 90%
 
 🔢 *Scegli tu:*
-• 1 famiglia di giocate
+• 3 famiglie di giocate
 • Range giorni (1-5)
 • Numero partite (1-10)
 
@@ -735,246 +870,279 @@ Basate su:
         {'text': '⬅️ INDIETRO', 'callback_data': 'start_setup'}
     ])
     
-    send_telegram_message(chat_id, info_text, parse_mode='Markdown', reply_markup=keyboard)
-
-# ============================================================
-# GESTIONE STATO UTENTE
-# ============================================================
-
-class UserState:
-    def __init__(self):
-        self.step = 'start'
-        self.selected_family = None
-        self.selected_days = 3
-        self.selected_count = 5
+    send_message(chat_id, info_text, parse_mode='Markdown', reply_markup=keyboard)
 
 # ============================================================
 # GESTIONE COMANDI
 # ============================================================
 
 def handle_start(chat_id: str):
-    """Gestisce il comando /start - mostra lo splashscreen"""
+    user_states[chat_id] = {
+        'step': 'splash',
+        'giocate': [],
+        'selected_days': 3,
+        'selected_count': 5
+    }
     
-    user_states[chat_id] = UserState()
     send_splashscreen(chat_id)
 
 def handle_start_setup(chat_id: str):
     if chat_id not in user_states:
-        user_states[chat_id] = UserState()
+        user_states[chat_id] = {
+            'step': 'selecting_giocata1',
+            'giocate': [],
+            'selected_days': 3,
+            'selected_count': 5
+        }
     
     state = user_states[chat_id]
-    state.step = 'selecting_family'
-    state.selected_family = None
+    state['step'] = 'selecting_giocata1'
+    state['giocate'] = []
     
-    text = """<b>🎯 Scegli una famiglia di giocate</b>
+    text = """🎯 *Giocata 1 (di 3)*
 
-Clicca su una famiglia per selezionarla."""
+Scegli la prima famiglia di giocate."""
     
     keyboard = create_family_keyboard()
-    send_telegram_message(chat_id, text, reply_markup=keyboard)
+    send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_family_selection(chat_id: str, family_id: str):
     if chat_id not in user_states:
         return
     
     state = user_states[chat_id]
-    state.selected_family = family_id
     
-    text = f"""<b>✅ Famiglia selezionata: {FAMIGLIE_GIOCATE[family_id]['label']}</b>
+    if family_id in state['giocate']:
+        send_message(chat_id, "⚠️ Hai già scelto questa famiglia! Scegline un'altra.")
+        return
+    
+    state['giocate'].append(family_id)
+    
+    if state['step'] == 'selecting_giocata1':
+        state['step'] = 'selecting_giocata2'
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[family_id]['label']}*
 
-Ora scegli il <b>range di giorni</b> (1-5)."""
+🎯 *Giocata 2 (di 3)*
+
+Scegli la seconda famiglia di giocate."""
+        keyboard = create_family_keyboard(state['giocate'])
+        send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
     
-    keyboard = create_days_keyboard()
-    send_telegram_message(chat_id, text, reply_markup=keyboard)
+    elif state['step'] == 'selecting_giocata2':
+        state['step'] = 'selecting_giocata3'
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*
+✅ *Giocata 2: {FAMIGLIE_GIOCATE[family_id]['label']}*
+
+🎯 *Giocata 3 (di 3)*
+
+Scegli la terza famiglia di giocate."""
+        keyboard = create_family_keyboard(state['giocate'])
+        send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
+    
+    elif state['step'] == 'selecting_giocata3':
+        state['step'] = 'selecting_days'
+        
+        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*
+✅ *Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}*
+✅ *Giocata 3: {FAMIGLIE_GIOCATE[family_id]['label']}*
+
+📅 Ora scegli il *range di giorni* (1-5)."""
+        
+        keyboard = create_days_keyboard()
+        send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_days_selection(chat_id: str, days: int):
     if chat_id not in user_states:
         return
     
     state = user_states[chat_id]
-    state.selected_days = days
-    state.step = 'selecting_count'
+    state['selected_days'] = days
+    state['step'] = 'selecting_count'
     
-    text = f"""<b>📅 Range giorni: {days} giorni</b>
-Famiglia: {FAMIGLIE_GIOCATE[state.selected_family]['label']}
+    text = f"""📅 *Range giorni: {days} giorni*
 
-Scegli <b>quante partite</b> vedere (1-10)."""
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
+Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
+
+🔢 Scegli *quante partite* vedere (1-10)."""
     
     keyboard = create_count_keyboard()
-    send_telegram_message(chat_id, text, reply_markup=keyboard)
+    send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_count_selection(chat_id: str, count: int):
     if chat_id not in user_states:
         return
     
     state = user_states[chat_id]
-    state.selected_count = count
+    state['selected_count'] = count
     
-    # Invia messaggio di caricamento
-    send_telegram_message(chat_id, "⏳ <b>Caricamento dati in corso...</b>")
+    text = f"""📋 *RIEPILOGO*
+
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
+Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
+📅 Giorni: {state['selected_days']}
+🔢 Partite: {count}
+
+Confermi?"""
+    
+    keyboard = create_inline_keyboard([
+        {'text': '✅ CONFERMA', 'callback_data': 'confirm_analysis'},
+        {'text': '❌ ANNULLA', 'callback_data': 'cancel_analysis'}
+    ])
+    send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
+
+def handle_confirm_analysis(chat_id: str):
+    if chat_id not in user_states:
+        return
+    
+    state = user_states[chat_id]
+    
+    send_message(chat_id, "⏳ *Caricamento e analisi in corso...*", parse_mode='Markdown')
     
     try:
-        # Carica i dati
         df = load_excel_from_github()
         if df is None:
-            send_telegram_message(chat_id, "❌ <b>Errore:</b> Impossibile caricare il file Excel.")
+            send_message(chat_id, "❌ *Errore:* File Excel non trovato.")
             return
         
         matches = parse_matches_from_excel(df)
         if not matches:
-            send_telegram_message(chat_id, "❌ <b>Errore:</b> Nessuna partita trovata nel file.")
+            send_message(chat_id, "❌ *Errore:* Nessuna partita.")
             return
         
-        logger.info(f"📊 Caricate {len(matches)} partite totali")
+        logger.info(f"📊 Caricate {len(matches)} partite")
         
-        # Analizza
-        analyses = analyze_matches(matches, state.selected_family, state.selected_days)
+        family_ids = state['giocate']
+        analyses = analyze_matches(matches, family_ids, state['selected_days'])
         
         if not analyses:
-            send_telegram_message(chat_id, f"📅 <b>Nessuna partita nei prossimi {state.selected_days} giorni.</b>")
+            send_message(chat_id, f"📅 *Nessuna partita nei prossimi {state['selected_days']} giorni.*", parse_mode='Markdown')
             return
         
-        # Genera report
-        report = generate_report(analyses, count)
+        report = generate_report(analyses, state['selected_count'])
         
-        # Invia report (con split se troppo lungo)
         if len(report) > 4000:
             chunks = [report[i:i+4000] for i in range(0, len(report), 4000)]
             for chunk in chunks:
-                send_telegram_message(chat_id, chunk)
+                send_message(chat_id, chunk, parse_mode='Markdown')
         else:
-            send_telegram_message(chat_id, report)
+            send_message(chat_id, report, parse_mode='Markdown')
         
-        # Pulsante nuova ricerca
         keyboard = create_inline_keyboard([
             {'text': '🔄 NUOVA RICERCA', 'callback_data': 'new_search'}
         ])
-        send_telegram_message(chat_id, "✅ <b>Analisi completata!</b>", reply_markup=keyboard)
+        send_message(chat_id, "✅ *Analisi completata!*", parse_mode='Markdown', reply_markup=keyboard)
         
     except Exception as e:
-        error_msg = f"❌ <b>Errore:</b> {str(e)}\n\n{traceback.format_exc()[:200]}"
+        error_msg = f"❌ *Errore:* {str(e)[:100]}"
         logger.error(f"Errore: {e}")
-        send_telegram_message(chat_id, error_msg)
+        send_message(chat_id, error_msg, parse_mode='Markdown')
+
+def handle_cancel_analysis(chat_id: str):
+    send_message(chat_id, "❌ *Operazione annullata.* Ricomincia con /start", parse_mode='Markdown')
 
 def handle_new_search(chat_id: str):
-    """Gestisce una nuova ricerca - torna allo splashscreen"""
-    
     if chat_id in user_states:
-        user_states[chat_id] = UserState()
+        user_states[chat_id] = {
+            'step': 'splash',
+            'giocate': [],
+            'selected_days': 3,
+            'selected_count': 5
+        }
+    
     send_splashscreen(chat_id)
 
 # ============================================================
-# HANDLER UPDATE
+# WEBHOOK
 # ============================================================
 
-def handle_update(update: dict):
+@app.route('/', methods=['GET'])
+def home():
+    return "🤖 GesssAI-Pro Bot è attivo!"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
     try:
-        if 'message' in update:
-            message = update['message']
-            chat_id = str(message['chat']['id'])
-            
-            if 'text' in message:
-                text = message['text']
-                if text == '/start':
-                    handle_start(chat_id)
-                else:
-                    send_telegram_message(chat_id, "❓ Usa /start per iniziare")
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'ok'})
         
-        elif 'callback_query' in update:
-            callback = update['callback_query']
-            chat_id = str(callback['message']['chat']['id'])
-            data = callback['data']
+        if 'message' in data:
+            message = data['message']
+            chat_id = str(message['chat']['id'])
+            text = message.get('text', '')
             
-            # Rispondi al callback per rimuovere il loading
+            if text == '/start':
+                handle_start(chat_id)
+            else:
+                send_message(chat_id, "❓ Usa /start")
+        
+        elif 'callback_query' in data:
+            callback = data['callback_query']
+            chat_id = str(callback['message']['chat']['id'])
+            callback_data = callback['data']
+            
             try:
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", 
                              json={'callback_query_id': callback['id']}, timeout=5)
             except:
                 pass
             
-            if data == 'start_setup':
+            if callback_data == 'start_setup':
                 handle_start_setup(chat_id)
-            elif data == 'show_info':
+            elif callback_data == 'show_info':
                 handle_info(chat_id)
-            elif data == 'new_search':
+            elif callback_data == 'new_search':
                 handle_new_search(chat_id)
-            elif data == 'count_confirm':
-                if chat_id in user_states and user_states[chat_id].selected_count:
-                    handle_count_selection(chat_id, user_states[chat_id].selected_count)
+            elif callback_data == 'confirm_analysis':
+                handle_confirm_analysis(chat_id)
+            elif callback_data == 'cancel_analysis':
+                handle_cancel_analysis(chat_id)
+            elif callback_data == 'count_confirm':
+                if chat_id in user_states and user_states[chat_id].get('selected_count'):
+                    handle_count_selection(chat_id, user_states[chat_id]['selected_count'])
                 else:
-                    send_telegram_message(chat_id, "⚠️ Seleziona prima il numero di partite!")
-            elif data.startswith('fam_'):
-                family_id = data[4:]
+                    send_message(chat_id, "⚠️ Scegli prima il numero!")
+            elif callback_data.startswith('fam_'):
+                family_id = callback_data[4:]
                 if family_id in FAMIGLIE_GIOCATE:
                     handle_family_selection(chat_id, family_id)
-            elif data.startswith('days_'):
-                days = int(data[5:])
+            elif callback_data.startswith('days_'):
+                days = int(callback_data[5:])
                 handle_days_selection(chat_id, days)
-            elif data.startswith('count_'):
-                count = int(data[6:])
+            elif callback_data.startswith('count_'):
+                if callback_data == 'count_10':
+                    count = 10
+                else:
+                    count = int(callback_data[6:])
                 if chat_id in user_states:
                     state = user_states[chat_id]
-                    state.selected_count = count
-                    text = f"""<b>🔢 Numero partite: {count}</b>
-Famiglia: {FAMIGLIE_GIOCATE[state.selected_family]['label']}
-Range giorni: {state.selected_days} giorni
+                    state['selected_count'] = count
+                    text = f"""📋 *RIEPILOGO*
 
-Clicca su un numero per cambiare, poi <b>✅ CONFERMA</b>"""
-                    keyboard = create_count_keyboard()
-                    send_telegram_message(chat_id, text, reply_markup=keyboard)
-    
+Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
+Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
+Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
+📅 Giorni: {state['selected_days']}
+🔢 Partite: {count}
+
+Confermi?"""
+                    keyboard = create_inline_keyboard([
+                        {'text': '✅ CONFERMA', 'callback_data': 'confirm_analysis'},
+                        {'text': '❌ ANNULLA', 'callback_data': 'cancel_analysis'}
+                    ])
+                    send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
+        
+        return jsonify({'status': 'ok'})
     except Exception as e:
-        logger.error(f"Errore handle_update: {e}")
-
-# ============================================================
-# POLLING
-# ============================================================
-
-def run_polling():
-    logger.info("🔄 Avvio bot...")
-    logger.info(f"📂 Excel: {EXCEL_URL}")
-    offset = None
-    
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-            params = {'timeout': 30}
-            if offset:
-                params['offset'] = offset
-            
-            response = requests.get(url, params=params, timeout=35)
-            response.raise_for_status()
-            
-            updates = response.json().get('result', [])
-            
-            for update in updates:
-                handle_update(update)
-                offset = update['update_id'] + 1
-            
-            if not updates:
-                time.sleep(1)
-                
-        except requests.exceptions.Timeout:
-            continue
-        except Exception as e:
-            logger.error(f"Errore polling: {e}")
-            time.sleep(5)
+        logger.error(f"Errore webhook: {e}")
+        return jsonify({'status': 'error'}), 500
 
 # ============================================================
 # MAIN
 # ============================================================
 
 if __name__ == "__main__":
-    print("🤖 GesssAI-Pro Telegram Bot")
-    print("=" * 40)
-    print(f"📂 Excel: {EXCEL_URL}")
-    print(f"🖼️ Splashscreen: {SPLASH_URL}")
-    print("")
-    print("In attesa di messaggi...")
-    print("Premi CTRL+C per fermare")
-    print("=" * 40)
-    
-    try:
-        run_polling()
-    except KeyboardInterrupt:
-        print("\n👋 Bot fermato")
+    app.run(host='0.0.0.0', port=5000)
