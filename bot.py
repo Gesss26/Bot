@@ -134,6 +134,37 @@ def format_date_eu(date_str: str) -> str:
 def get_today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
+def is_match_future(match: Match) -> bool:
+    """Verifica se la partita è futura rispetto all'orario corrente"""
+    if match.stato != "Futura":
+        return False
+    
+    try:
+        # Combina data e ora
+        match_datetime_str = f"{match.data} {match.ora}"
+        # Prova diversi formati di ora
+        for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H", "%Y-%m-%d"]:
+            try:
+                match_datetime = datetime.strptime(match_datetime_str, fmt)
+                # Se l'ora non è specificata, considera mezzogiorno come default
+                if fmt == "%Y-%m-%d":
+                    match_datetime = match_datetime.replace(hour=12, minute=0)
+                return match_datetime > datetime.now()
+            except ValueError:
+                continue
+        
+        # Se non riesce a parsare, considera la data
+        match_date = datetime.strptime(match.data, "%Y-%m-%d")
+        return match_date >= datetime.now().date()
+    except Exception as e:
+        logger.warning(f"Errore nel filtraggio ora per {match.casa} vs {match.ospiti}: {e}")
+        # Fallback: considera solo la data
+        try:
+            match_date = datetime.strptime(match.data, "%Y-%m-%d")
+            return match_date >= datetime.now().date()
+        except:
+            return True
+
 # ============================================================
 # CARICAMENTO DATI DAL FILE EXCEL
 # ============================================================
@@ -461,12 +492,16 @@ def get_best_bet_for_family(family_id: str, stats: Dict) -> Optional[Dict]:
     return None
 
 def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> List[MatchAnalysis]:
+    # Filtra per stato futuro
     future_matches = [m for m in matches if m.stato == "Futura"]
     today = get_today_str()
     limit_date = (datetime.now() + timedelta(days=days_range)).strftime("%Y-%m-%d")
     future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
     
-    logger.info(f"🔍 Trovate {len(future_matches)} partite future fino al {limit_date}")
+    # FILTRA PER ORARIO - ESCLUDE PARTITE GIA' INIZIATE O PASSATE
+    future_matches = [m for m in future_matches if is_match_future(m)]
+    
+    logger.info(f"🔍 Trovate {len(future_matches)} partite future (filtrate per data e ora) fino al {limit_date}")
     
     results = []
     
