@@ -14,7 +14,7 @@ import traceback
 # CONFIGURAZIONE
 # ============================================================
 
-TOKEN = "7674593142:AAGhP_A5x9XIHQ1BKKufDA0jwjn2k2KerJg"
+TOKEN = "7674593142:AAFL7VQMDjnBn2ZONONzis4iUN6gKKCQOJ4"
 EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/excel/GesssAI_Input.xlsx"
 
 # ============================================================
