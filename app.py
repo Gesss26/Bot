@@ -21,7 +21,7 @@ app = Flask(__name__)
 # CONFIGURAZIONE
 # ============================================================
 
-TOKEN = "8988939918:AAF3JCxGNnSBwfEvW47KYguaAdiEnbd9Qac"
+TOKEN = "8988939918:AAHJGxYPnfz6BUtiuGfYcVfdTM88pEayOB0"
 EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/excel/GesssAI_Input.xlsx"
 SPLASH_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/Splashscreen.png"
 
