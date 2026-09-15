@@ -11,8 +11,14 @@ import re
 import time
 import traceback
 
+from quote_utils import (
+    load_quote_from_github,
+    trova_quota_per_giocata,
+    calcola_value_bet,
+)
+
 # ============================================================
-# CREAZIONE APP FLASK - DEVE ESSERE LA PRIMA COSA DOPO GLI IMPORT
+# CREAZIONE APP FLASK
 # ============================================================
 
 app = Flask(__name__)
@@ -56,6 +62,11 @@ class Giocata:
     label: str
     pct: int
     is_bomb: bool
+    quota: Optional[float] = None
+    edge: Optional[float] = None
+    quota_fair: Optional[float] = None
+    kelly: Optional[float] = None
+    classificazione: Optional[str] = None
 
 @dataclass
 class MatchAnalysis:
@@ -100,6 +111,19 @@ FAMIGLIE_LIST = [
 
 user_states = {}
 
+# Cache quote in memoria
+_quote_cache = {'partite': [], 'timestamp': 0}
+_QUOTE_CACHE_TTL = 3600
+
+def get_quote_cached() -> List[Dict]:
+    global _quote_cache
+    now = time.time()
+    if now - _quote_cache['timestamp'] > _QUOTE_CACHE_TTL or not _quote_cache['partite']:
+        logger.info("🔄 Ricarico quote...")
+        _quote_cache['partite'] = load_quote_from_github()
+        _quote_cache['timestamp'] = now
+    return _quote_cache['partite']
+
 # ============================================================
 # FUNZIONI DI UTILITÀ
 # ============================================================
@@ -107,21 +131,17 @@ user_states = {}
 def normalize_date(date_str: str) -> Optional[str]:
     if not date_str:
         return None
-    
     if isinstance(date_str, (int, float)):
         excel_epoch = datetime(1899, 12, 30)
         date = excel_epoch + timedelta(days=float(date_str))
         return date.strftime("%Y-%m-%d")
-    
     date_str = str(date_str).strip()
     if date_str.startswith('20') and '-' in date_str:
         return date_str[:10]
-    
     if '/' in date_str:
         parts = date_str.split('/')
         if len(parts) == 3:
             return f"{parts[2]}-{parts[1]}-{parts[0]}"
-    
     try:
         date = pd.to_datetime(date_str)
         return date.strftime("%Y-%m-%d")
@@ -141,56 +161,27 @@ def get_today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 def is_match_future(match: Match) -> bool:
-    """Verifica se la partita è futura rispetto all'orario corrente"""
     if match.stato != "Futura":
         return False
-    
     try:
-        # Combina data e ora
         match_datetime_str = f"{match.data} {match.ora}"
-        # Prova diversi formati di ora
         for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H", "%Y-%m-%d"]:
             try:
                 match_datetime = datetime.strptime(match_datetime_str, fmt)
-                # Se l'ora non è specificata, considera mezzogiorno come default
                 if fmt == "%Y-%m-%d":
                     match_datetime = match_datetime.replace(hour=12, minute=0)
                 return match_datetime > datetime.now()
             except ValueError:
                 continue
-        
-        # Se non riesce a parsare, considera la data
         match_date = datetime.strptime(match.data, "%Y-%m-%d")
         return match_date >= datetime.now().date()
     except Exception as e:
-        logger.warning(f"Errore nel filtraggio ora per {match.casa} vs {match.ospiti}: {e}")
-        # Fallback: considera solo la data
+        logger.warning(f"Errore filtraggio ora {match.casa} vs {match.ospiti}: {e}")
         try:
             match_date = datetime.strptime(match.data, "%Y-%m-%d")
             return match_date >= datetime.now().date()
         except:
             return True
-
-# ============================================================
-# FUNZIONI PER MULTIGOL
-# ============================================================
-
-def get_multigol_range(media_gol: float) -> str:
-    if media_gol <= 1.0:
-        return "0-2"
-    elif media_gol <= 2.5:
-        return "1-3"
-    else:
-        return "2-5"
-
-def get_multigol_total_range(media_home: float, media_away: float) -> str:
-    media_totale = media_home + media_away
-    if media_totale <= 2.0:
-        return "0-2"
-    elif media_totale <= 4.0:
-        return "1-3"
-    else:
-        return "2-5"
 
 # ============================================================
 # CARICAMENTO DATI
@@ -251,7 +242,6 @@ def parse_matches_from_excel(df: pd.DataFrame) -> List[Match]:
             
             if not casa or not ospite:
                 continue
-            
             data = normalize_date(data_raw)
             if not data:
                 continue
@@ -316,14 +306,7 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
     team_matches = [m for m in matches if m.stato == "Giocata" and (m.casa == team_name or m.ospiti == team_name)]
     
     if not team_matches:
-        return {
-            'form': '-----', 
-            'pct': 50, 
-            'media_gol_fatti': 0, 
-            'media_gol_subiti': 0, 
-            'partite': 0,
-            'form_pallini': '🔘🔘🔘🔘🔘'
-        }
+        return {'form': '-----', 'pct': 50, 'media_gol_fatti': 0, 'media_gol_subiti': 0, 'partite': 0}
     
     team_matches.sort(key=lambda m: m.data, reverse=True)
     team_matches = team_matches[:5]
@@ -349,21 +332,8 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form += 'S'
     
-    form_pallini = ''
-    for f in form:
-        if f == 'V':
-            form_pallini += '🟢'
-        elif f == 'P':
-            form_pallini += '🟡'
-        else:
-            form_pallini += '🔴'
-    
-    while len(form_pallini) < 5:
-        form_pallini += '🔘'
-    
     return {
         'form': form or '-----',
-        'form_pallini': form_pallini,
         'pct': round((points / (len(team_matches) * 3)) * 100) if team_matches else 50,
         'media_gol_fatti': round(gol_fatti / len(team_matches), 1) if team_matches else 0,
         'media_gol_subiti': round(gol_subiti / len(team_matches), 1) if team_matches else 0,
@@ -392,23 +362,17 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
         is_home = g.casa == home_team
         team_goals = g.golCasa if is_home else g.golOspite
         opp_goals = g.golOspite if is_home else g.golCasa
-        if team_goals > opp_goals:
-            home_wins += 1
-        elif team_goals == opp_goals:
-            home_draws += 1
-        else:
-            home_losses += 1
+        if team_goals > opp_goals: home_wins += 1
+        elif team_goals == opp_goals: home_draws += 1
+        else: home_losses += 1
     
     for g in away_games:
         is_home = g.casa == away_team
         team_goals = g.golCasa if is_home else g.golOspite
         opp_goals = g.golOspite if is_home else g.golCasa
-        if team_goals > opp_goals:
-            away_wins += 1
-        elif team_goals == opp_goals:
-            away_draws += 1
-        else:
-            away_losses += 1
+        if team_goals > opp_goals: away_wins += 1
+        elif team_goals == opp_goals: away_draws += 1
+        else: away_losses += 1
     
     total = len(all_games)
     p1 = ((home_wins + away_losses) / total) * 100 if total > 0 else 0
@@ -430,33 +394,21 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
     ng = 100 - gg
     
     return {
-        'p1': round(p1),
-        'pX': round(pX),
-        'p2': round(p2),
-        'p1X': round(p1X),
-        'p12': round(p12),
-        'pX2': round(pX2),
-        'gg': round(gg),
-        'ng': round(ng),
-        'under_over': under_over,
-        'total_games': total
+        'p1': round(p1), 'pX': round(pX), 'p2': round(p2),
+        'p1X': round(p1X), 'p12': round(p12), 'pX2': round(pX2),
+        'gg': round(gg), 'ng': round(ng),
+        'under_over': under_over, 'total_games': total
     }
 
 def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None) -> int:
     if stats.get('error'):
         return 0
     
-    p1 = stats.get('p1', 0)
-    pX = stats.get('pX', 0)
-    p2 = stats.get('p2', 0)
-    p1X = stats.get('p1X', 0)
-    p12 = stats.get('p12', 0)
-    pX2 = stats.get('pX2', 0)
-    gg = stats.get('gg', 0)
-    ng = stats.get('ng', 0)
+    p1 = stats.get('p1', 0); pX = stats.get('pX', 0); p2 = stats.get('p2', 0)
+    p1X = stats.get('p1X', 0); p12 = stats.get('p12', 0); pX2 = stats.get('pX2', 0)
+    gg = stats.get('gg', 0); ng = stats.get('ng', 0)
     under_over = stats.get('under_over', [])
     
-    # MG CASA+OSPITE
     if '+' in giocata and '-' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2 and '-' in parts[0] and '-' in parts[1]:
@@ -464,126 +416,96 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
                 home_range = get_multigol_range(home_media_gol)
                 away_range = get_multigol_range(away_media_gol)
                 expected = f"{home_range}+{away_range}"
-                
-                if giocata == expected:
-                    return 90
-                
+                if giocata == expected: return 90
                 h1, h2 = giocata.split('+')[0].split('-')
                 a1, a2 = giocata.split('+')[1].split('-')
                 eh1, eh2 = home_range.split('-')
                 ea1, ea2 = away_range.split('-')
-                
-                diff = (abs(int(h1)-int(eh1)) + abs(int(h2)-int(eh2)) + 
-                       abs(int(a1)-int(ea1)) + abs(int(a2)-int(ea2)))
-                
-                if diff == 0:
-                    return 90
-                elif diff <= 2:
-                    return 80
-                elif diff <= 4:
-                    return 65
-                elif diff <= 6:
-                    return 50
-                else:
-                    return 35
+                diff = (abs(int(h1)-int(eh1)) + abs(int(h2)-int(eh2)) + abs(int(a1)-int(ea1)) + abs(int(a2)-int(ea2)))
+                if diff == 0: return 90
+                elif diff <= 2: return 80
+                elif diff <= 4: return 65
+                elif diff <= 6: return 50
+                else: return 35
         return 50
     
-    # MULTIGOL TOTALE
     if giocata in ['0-2', '1-3', '2-5']:
         if home_media_gol is not None and away_media_gol is not None:
             expected = get_multigol_total_range(home_media_gol, away_media_gol)
-            if giocata == expected:
-                return 85
+            if giocata == expected: return 85
             g1, g2 = giocata.split('-')
             e1, e2 = expected.split('-')
             diff = abs(int(g1)-int(e1)) + abs(int(g2)-int(e2))
-            if diff <= 2:
-                return 70
-            elif diff <= 4:
-                return 50
-            else:
-                return 30
+            if diff <= 2: return 70
+            elif diff <= 4: return 50
+            else: return 30
         return 50
     
-    # DC+MULTIGOL
     if giocata.startswith('1X+') and giocata[3:] in ['0-2', '1-3', '2-5']:
-        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
-        return round((p1X + multigol_pct) / 2)
+        return round((p1X + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
     if giocata.startswith('12+') and giocata[3:] in ['0-2', '1-3', '2-5']:
-        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
-        return round((p12 + multigol_pct) / 2)
+        return round((p12 + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
     if giocata.startswith('X2+') and giocata[3:] in ['0-2', '1-3', '2-5']:
-        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
-        return round((pX2 + multigol_pct) / 2)
+        return round((pX2 + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
     
-    # GIOCATE STANDARD
-    if giocata == '1':
-        return p1
-    if giocata == 'X':
-        return pX
-    if giocata == '2':
-        return p2
-    if giocata == '1X':
-        return p1X
-    if giocata == '12':
-        return p12
-    if giocata == 'X2':
-        return pX2
-    if giocata == 'GG':
-        return gg
-    if giocata == 'NG':
-        return ng
-    if giocata == 'Over 1.5':
-        return under_over[0]['over'] if len(under_over) > 0 else 0
-    if giocata == 'Over 2.5':
-        return under_over[1]['over'] if len(under_over) > 1 else 0
-    if giocata == 'Under 1.5':
-        return under_over[0]['under'] if len(under_over) > 0 else 0
-    if giocata == 'Under 2.5':
-        return under_over[1]['under'] if len(under_over) > 1 else 0
-    if giocata == 'Under 3.5':
-        return under_over[2]['under'] if len(under_over) > 2 else 0
-    if giocata == 'Under 4.5':
-        return under_over[3]['under'] if len(under_over) > 3 else 0
+    if giocata == '1': return p1
+    if giocata == 'X': return pX
+    if giocata == '2': return p2
+    if giocata == '1X': return p1X
+    if giocata == '12': return p12
+    if giocata == 'X2': return pX2
+    if giocata == 'GG': return gg
+    if giocata == 'NG': return ng
+    if giocata == 'Over 1.5': return under_over[0]['over'] if len(under_over) > 0 else 0
+    if giocata == 'Over 2.5': return under_over[1]['over'] if len(under_over) > 1 else 0
+    if giocata == 'Under 1.5': return under_over[0]['under'] if len(under_over) > 0 else 0
+    if giocata == 'Under 2.5': return under_over[1]['under'] if len(under_over) > 1 else 0
+    if giocata == 'Under 3.5': return under_over[2]['under'] if len(under_over) > 2 else 0
+    if giocata == 'Under 4.5': return under_over[3]['under'] if len(under_over) > 3 else 0
     
-    # DC+UNDER/OVER
     if giocata.startswith('1X+O'):
-        over = giocata.replace('1X+O', 'Over ')
-        return round((p1X + get_giocata_pct(over, stats)) / 2)
+        return round((p1X + get_giocata_pct(giocata.replace('1X+O', 'Over '), stats)) / 2)
     if giocata.startswith('12+O'):
-        over = giocata.replace('12+O', 'Over ')
-        return round((p12 + get_giocata_pct(over, stats)) / 2)
+        return round((p12 + get_giocata_pct(giocata.replace('12+O', 'Over '), stats)) / 2)
     if giocata.startswith('X2+O'):
-        over = giocata.replace('X2+O', 'Over ')
-        return round((pX2 + get_giocata_pct(over, stats)) / 2)
+        return round((pX2 + get_giocata_pct(giocata.replace('X2+O', 'Over '), stats)) / 2)
     if giocata.startswith('1X+U'):
-        under = giocata.replace('1X+U', 'Under ')
-        return round((p1X + get_giocata_pct(under, stats)) / 2)
+        return round((p1X + get_giocata_pct(giocata.replace('1X+U', 'Under '), stats)) / 2)
     if giocata.startswith('12+U'):
-        under = giocata.replace('12+U', 'Under ')
-        return round((p12 + get_giocata_pct(under, stats)) / 2)
+        return round((p12 + get_giocata_pct(giocata.replace('12+U', 'Under '), stats)) / 2)
     if giocata.startswith('X2+U'):
-        under = giocata.replace('X2+U', 'Under ')
-        return round((pX2 + get_giocata_pct(under, stats)) / 2)
+        return round((pX2 + get_giocata_pct(giocata.replace('X2+U', 'Under '), stats)) / 2)
     
     return 0
+
+def get_multigol_range(media_gol: float) -> str:
+    if media_gol <= 1.0: return "0-2"
+    elif media_gol <= 2.5: return "1-3"
+    else: return "2-5"
+
+def get_multigol_total_range(media_home: float, media_away: float) -> str:
+    media_totale = media_home + media_away
+    if media_totale <= 2.0: return "0-2"
+    elif media_totale <= 4.0: return "1-3"
+    else: return "2-5"
 
 def get_best_bets_for_family(family_id: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None, limit: int = 1) -> List[Dict]:
     family = FAMIGLIE_GIOCATE.get(family_id)
     if not family:
         return []
-    
     results = []
     for opt in family['options']:
         pct = get_giocata_pct(opt, stats, home_media_gol, away_media_gol)
         if pct > 0:
             results.append({'giocata': opt, 'pct': pct})
-    
     results.sort(key=lambda x: x['pct'], reverse=True)
     return results[:limit]
 
-def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int) -> List[MatchAnalysis]:
-    # Filtra per stato futuro
+def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int,
+                    partite_quote: List[Dict] = None) -> List[MatchAnalysis]:
+    if partite_quote is None:
+        partite_quote = []
+    
     future_matches = [m for m in matches if m.stato == "Futura"]
     today = get_today_str()
     limit_date = (datetime.now() + timedelta(days=days_range)).strftime("%Y-%m-%d")
@@ -593,10 +515,8 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
     else:
         future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
     
-    # FILTRA PER ORARIO - ESCLUDE PARTITE GIA' INIZIATE O PASSATE
     future_matches = [m for m in future_matches if is_match_future(m)]
-    
-    logger.info(f"🔍 Trovate {len(future_matches)} partite future (filtrate per data e ora) fino al {limit_date}")
+    logger.info(f"🔍 Trovate {len(future_matches)} partite future fino al {limit_date}")
     
     results = []
     
@@ -617,44 +537,46 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
             
             if family_id in ['mg_casa_ospite', 'multigol', 'dc_multigol']:
                 best_bets = get_best_bets_for_family(
-                    family_id, 
-                    stats, 
+                    family_id, stats,
                     home_media_gol=home_form['media_gol_fatti'],
                     away_media_gol=away_form['media_gol_fatti'],
                     limit=1
                 )
-                for bet in best_bets:
-                    giocate.append(Giocata(
-                        famiglia=family['label'],
-                        label=bet['giocata'],
-                        pct=bet['pct'],
-                        is_bomb=bet['pct'] >= 90
-                    ))
             else:
                 best_bets = get_best_bets_for_family(family_id, stats, limit=1)
-                for bet in best_bets:
-                    giocate.append(Giocata(
-                        famiglia=family['label'],
-                        label=bet['giocata'],
-                        pct=bet['pct'],
-                        is_bomb=bet['pct'] >= 90
-                    ))
+            
+            for bet in best_bets:
+                quota = trova_quota_per_giocata(match, family_id, bet['giocata'], partite_quote)
+                edge = quota_fair = kelly = classificazione = None
+                if quota:
+                    vb = calcola_value_bet(bet['pct'], quota)
+                    edge = vb['edge']
+                    quota_fair = vb['quota_fair']
+                    kelly = vb['kelly']
+                    classificazione = vb['classificazione']
+                
+                giocate.append(Giocata(
+                    famiglia=family['label'],
+                    label=bet['giocata'],
+                    pct=bet['pct'],
+                    is_bomb=bet['pct'] >= 90,
+                    quota=quota,
+                    edge=edge,
+                    quota_fair=quota_fair,
+                    kelly=kelly,
+                    classificazione=classificazione,
+                ))
         
         if not giocate:
             continue
         
         giocate.sort(key=lambda x: x.pct, reverse=True)
-        
         score = round(sum(g.pct for g in giocate) / len(giocate))
         has_bomb = any(g.is_bomb for g in giocate)
         
         results.append(MatchAnalysis(
-            match=match,
-            giocate=giocate,
-            score=score,
-            has_bomb=has_bomb,
-            home_form=home_form,
-            away_form=away_form
+            match=match, giocate=giocate, score=score, has_bomb=has_bomb,
+            home_form=home_form, away_form=away_form
         ))
     
     results.sort(key=lambda x: x.score, reverse=True)
@@ -670,7 +592,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         return "📅 Nessuna partita trovata nei giorni selezionati."
     
     top = analyses[:count]
-    
     lines = []
     lines.append("📊 *GesssAI-Pro*")
     lines.append(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -689,38 +610,39 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         lines.append(f"🏠 {match.casa}")
         lines.append(f"✈️ {match.ospiti}")
         lines.append("")
-        
         lines.append(f"📊 {match.casa}")
         lines.append(f"{analysis.home_form['form_pallini']} = {analysis.home_form['pct']}%")
         lines.append("")
         lines.append(f"⚽️ Media gol: {analysis.home_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.home_form['media_gol_fatti'])}")
         lines.append("")
-        
         lines.append(f"📊 {match.ospiti}")
         lines.append(f"{analysis.away_form['form_pallini']} = {analysis.away_form['pct']}%")
         lines.append("")
         lines.append(f"⚽️ Media gol: {analysis.away_form['media_gol_fatti']} - Fascia: {get_multigol_range(analysis.away_form['media_gol_fatti'])}")
         lines.append("")
-        
         lines.append(f"⚽️ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
         lines.append("")
         
         for g in giocate:
-            if g.pct >= 90:
-                emoji = '💣'
-            elif g.pct >= 67:
-                emoji = '🟢'
-            elif g.pct >= 34:
-                emoji = '🟡'
-            else:
-                emoji = '🔴'
+            if g.pct >= 90: emoji = '💣'
+            elif g.pct >= 67: emoji = '🟢'
+            elif g.pct >= 34: emoji = '🟡'
+            else: emoji = '🔴'
             
             bomb = ' 💣' if g.is_bomb else ''
             lines.append(f"🎯 {g.famiglia}: {g.label} {emoji} *{g.pct}%*{bomb}")
+            
+            if g.quota:
+                edge_str = f"{g.edge:+.1f}%" if g.edge is not None else "N/D"
+                edge_emoji = "💎" if g.edge and g.edge > 20 else "✅" if g.edge and g.edge > 10 else "🟡" if g.edge and g.edge > 5 else "⚪"
+                lines.append(f"💰 Quota: {g.quota} | Fair: {g.quota_fair} | Edge: {edge_str} {edge_emoji}")
+                if g.kelly and g.kelly > 0:
+                    lines.append(f"📈 Kelly: {g.kelly}%")
+                if g.classificazione and g.edge and g.edge > 5:
+                    lines.append(f"{g.classificazione}")
         
         lines.append("")
         lines.append(f"📊 Score: *{analysis.score}%*")
-        
         if analysis.has_bomb:
             lines.append("💣 *BOMBA!*")
         
@@ -740,7 +662,6 @@ def send_message(chat_id: str, text: str, parse_mode: str = 'Markdown', reply_ma
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
     if reply_markup:
         payload['reply_markup'] = json.dumps(reply_markup)
-    
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200:
@@ -765,8 +686,7 @@ def create_inline_keyboard(buttons: List[Dict[str, str]]) -> dict:
     return {'inline_keyboard': keyboard}
 
 def create_family_keyboard(selected: List[str] = None) -> dict:
-    if selected is None:
-        selected = []
+    if selected is None: selected = []
     buttons = []
     for family_id, label in FAMIGLIE_LIST:
         if family_id in selected:
@@ -775,25 +695,17 @@ def create_family_keyboard(selected: List[str] = None) -> dict:
     return create_inline_keyboard(buttons)
 
 def create_days_keyboard() -> dict:
-    buttons = []
-    for days in range(1, 6):
-        buttons.append({'text': f"{days} giorni", 'callback_data': f"days_{days}"})
+    buttons = [{'text': f"{days} giorni", 'callback_data': f"days_{days}"} for days in range(1, 6)]
     return create_inline_keyboard(buttons)
 
 def create_count_keyboard() -> dict:
-    buttons = []
-    for count in [1, 2, 3]:
-        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
-    for count in [4, 5, 6]:
-        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
-    for count in [7, 8, 9]:
-        buttons.append({'text': str(count), 'callback_data': f"count_{count}"})
+    buttons = [{'text': str(count), 'callback_data': f"count_{count}"} for count in [1, 2, 3, 4, 5, 6, 7, 8, 9]]
     buttons.append({'text': '10', 'callback_data': 'count_10'})
     buttons.append({'text': '✅ CONFERMA', 'callback_data': 'count_confirm'})
     return create_inline_keyboard(buttons)
 
 # ============================================================
-# FUNZIONI SPLASHSCREEN
+# SPLASHSCREEN
 # ============================================================
 
 def send_splashscreen(chat_id: str):
@@ -804,37 +716,27 @@ def send_splashscreen(chat_id: str):
 💡 *Come funziona:*
 1️⃣ Scegli 3 famiglie di giocate
 2️⃣ Seleziona il periodo (1-5 giorni)
-3️⃣ Ricevi le previsioni con percentuali
+3️⃣ Ricevi le previsioni con percentuali e *quote*
+
+💰 *Value Bet integrate!*
+💎 Edge > 20% | ✅ > 10% | 🟡 > 5%
 
 🎯 *Preparati all'azione!*"""
     
     url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
-    payload = {
-        'chat_id': chat_id,
-        'photo': SPLASH_URL,
-        'caption': caption,
-        'parse_mode': 'Markdown'
-    }
+    payload = {'chat_id': chat_id, 'photo': SPLASH_URL, 'caption': caption, 'parse_mode': 'Markdown'}
     
     try:
         response = requests.post(url, json=payload, timeout=15)
-        
         if response.status_code == 200:
             keyboard = create_inline_keyboard([
                 {'text': '🎯 INIZIA ORA', 'callback_data': 'start_setup'},
                 {'text': 'ℹ️ INFO', 'callback_data': 'show_info'}
             ])
-            
-            send_message(
-                chat_id, 
-                "✨ *Cosa vuoi fare?*", 
-                parse_mode='Markdown', 
-                reply_markup=keyboard
-            )
+            send_message(chat_id, "✨ *Cosa vuoi fare?*", parse_mode='Markdown', reply_markup=keyboard)
         else:
             logger.warning(f"Errore caricamento immagine: {response.text}")
             send_splashscreen_text(chat_id)
-            
     except Exception as e:
         logger.error(f"Errore invio splashscreen: {e}")
         send_splashscreen_text(chat_id)
@@ -847,10 +749,10 @@ def send_splashscreen_text(chat_id: str):
 ║                                ║
 ║   ⚽ *Analisi Calcio Avanzata* ║
 ║   📊 *Statistiche in Tempo Reale* ║
-║   🎯 *Previsioni Accurate*    ║
+║   💰 *Quote e Value Bet*      ║
 ║                                ║
 ║   💡 *Come funziona:*          ║
-║   1️⃣ Scegli 3 famiglie di giocate ║
+║   1️⃣ Scegli 3 famiglie       ║
 ║   2️⃣ Seleziona il periodo     ║
 ║   3️⃣ Ricevi le previsioni     ║
 ║                                ║
@@ -864,16 +766,15 @@ def send_splashscreen_text(chat_id: str):
         {'text': '🎯 INIZIA ORA', 'callback_data': 'start_setup'},
         {'text': 'ℹ️ INFO', 'callback_data': 'show_info'}
     ])
-    
     send_message(chat_id, splash_text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_info(chat_id: str):
     info_text = """ℹ️ *GESSsAI-PRO - Info*
 
 📌 *Cos'è GESSsAI-PRO?*
-È un bot di analisi calcistica che utilizza dati statistici per generare previsioni sulle partite.
+Bot di analisi calcistica con dati statistici e quote Marathonbet.
 
-🎯 *Famiglie di giocate disponibili:*
+🎯 *Famiglie di giocate:*
 • 🎯 Fisse (1, X, 2)
 • 🛡️ Doppia Chance (1X, 12, X2)
 • ⚽ GG-NG
@@ -884,19 +785,16 @@ def handle_info(chat_id: str):
 • ⚔️ MG Casa+Ospite
 • 🔗 DC+Multigol
 
-📊 *Come vengono calcolate le percentuali?*
-Basate su:
-• Forma delle squadre (ultime 5 partite)
-• Media gol fatti/subiti
-• Statistiche storiche
-• Fattori di contesto
+💰 *Value Bet:*
+La quota bookmaker viene confrontata con la quota fair (100 / %).
+• 💎 Edge > 20% → VALUE ECCELLENTE
+• ✅ Edge > 10% → VALUE BUONO
+• 🟡 Edge > 5% → VALUE MARGINALE
+• ⚪ Edge ≤ 5% → Quota fair
+
+📈 *Kelly stake*: percentuale di bankroll consigliata.
 
 💣 *BOMBA!* = Giocata con % ≥ 90%
-
-🔢 *Scegli tu:*
-• 3 famiglie di giocate
-• Range giorni (1-5)
-• Numero partite (1-10)
 
 👨‍💻 *Creato con passione per il calcio!*"""
     
@@ -904,7 +802,6 @@ Basate su:
         {'text': '🎯 INIZIA', 'callback_data': 'start_setup'},
         {'text': '⬅️ INDIETRO', 'callback_data': 'start_setup'}
     ])
-    
     send_message(chat_id, info_text, parse_mode='Markdown', reply_markup=keyboard)
 
 # ============================================================
@@ -918,7 +815,6 @@ def handle_start(chat_id: str):
         'selected_days': 3,
         'selected_count': 5
     }
-    
     send_splashscreen(chat_id)
 
 def handle_start_setup(chat_id: str):
@@ -929,22 +825,15 @@ def handle_start_setup(chat_id: str):
             'selected_days': 3,
             'selected_count': 5
         }
-    
     state = user_states[chat_id]
     state['step'] = 'selecting_giocata1'
     state['giocate'] = []
-    
-    text = """🎯 *Giocata 1 (di 3)*
-
-Scegli la prima famiglia di giocate."""
-    
+    text = "🎯 *Giocata 1 (di 3)*\n\nScegli la prima famiglia di giocate."
     keyboard = create_family_keyboard()
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_family_selection(chat_id: str, family_id: str):
-    if chat_id not in user_states:
-        return
-    
+    if chat_id not in user_states: return
     state = user_states[chat_id]
     
     if family_id in state['giocate']:
@@ -955,73 +844,34 @@ def handle_family_selection(chat_id: str, family_id: str):
     
     if state['step'] == 'selecting_giocata1':
         state['step'] = 'selecting_giocata2'
-        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[family_id]['label']}*
-
-🎯 *Giocata 2 (di 3)*
-
-Scegli la seconda famiglia di giocate."""
+        text = f"✅ *Giocata 1: {FAMIGLIE_GIOCATE[family_id]['label']}*\n\n🎯 *Giocata 2 (di 3)*\n\nScegli la seconda famiglia."
         keyboard = create_family_keyboard(state['giocate'])
         send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
-    
     elif state['step'] == 'selecting_giocata2':
         state['step'] = 'selecting_giocata3'
-        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*
-✅ *Giocata 2: {FAMIGLIE_GIOCATE[family_id]['label']}*
-
-🎯 *Giocata 3 (di 3)*
-
-Scegli la terza famiglia di giocate."""
+        text = f"✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*\n✅ *Giocata 2: {FAMIGLIE_GIOCATE[family_id]['label']}*\n\n🎯 *Giocata 3 (di 3)*\n\nScegli la terza famiglia."
         keyboard = create_family_keyboard(state['giocate'])
         send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
-    
     elif state['step'] == 'selecting_giocata3':
         state['step'] = 'selecting_days'
-        
-        text = f"""✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*
-✅ *Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}*
-✅ *Giocata 3: {FAMIGLIE_GIOCATE[family_id]['label']}*
-
-📅 Ora scegli il *range di giorni* (1-5)."""
-        
+        text = f"✅ *Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}*\n✅ *Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}*\n✅ *Giocata 3: {FAMIGLIE_GIOCATE[family_id]['label']}*\n\n📅 Scegli il *range di giorni* (1-5)."
         keyboard = create_days_keyboard()
         send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_days_selection(chat_id: str, days: int):
-    if chat_id not in user_states:
-        return
-    
+    if chat_id not in user_states: return
     state = user_states[chat_id]
     state['selected_days'] = days
     state['step'] = 'selecting_count'
-    
-    text = f"""📅 *Range giorni: {days} giorni*
-
-Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
-Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
-Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
-
-🔢 Scegli *quante partite* vedere (1-10)."""
-    
+    text = f"📅 *Range giorni: {days} giorni*\n\n🔢 Scegli *quante partite* vedere (1-10)."
     keyboard = create_count_keyboard()
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_count_selection(chat_id: str, count: int):
-    if chat_id not in user_states:
-        return
-    
+    if chat_id not in user_states: return
     state = user_states[chat_id]
     state['selected_count'] = count
-    
-    text = f"""📋 *RIEPILOGO*
-
-Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
-Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
-Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
-📅 Giorni: {state['selected_days']}
-🔢 Partite: {count}
-
-Confermi?"""
-    
+    text = f"📋 *RIEPILOGO*\n\nGiocate: {', '.join(FAMIGLIE_GIOCATE[g]['label'] for g in state['giocate'])}\n📅 Giorni: {state['selected_days']}\n🔢 Partite: {count}\n\nConfermi?"
     keyboard = create_inline_keyboard([
         {'text': '✅ CONFERMA', 'callback_data': 'confirm_analysis'},
         {'text': '❌ ANNULLA', 'callback_data': 'cancel_analysis'}
@@ -1029,12 +879,9 @@ Confermi?"""
     send_message(chat_id, text, parse_mode='Markdown', reply_markup=keyboard)
 
 def handle_confirm_analysis(chat_id: str):
-    if chat_id not in user_states:
-        return
-    
+    if chat_id not in user_states: return
     state = user_states[chat_id]
-    
-    send_message(chat_id, "⏳ *Caricamento e analisi in corso...*", parse_mode='Markdown')
+    send_message(chat_id, "⏳ *Caricamento dati e quote in corso...*", parse_mode='Markdown')
     
     try:
         df = load_excel_from_github()
@@ -1047,10 +894,11 @@ def handle_confirm_analysis(chat_id: str):
             send_message(chat_id, "❌ *Errore:* Nessuna partita.")
             return
         
-        logger.info(f"📊 Caricate {len(matches)} partite")
+        partite_quote = get_quote_cached()
+        logger.info(f"💰 Quote disponibili per {len(partite_quote)} partite")
         
         family_ids = state['giocate']
-        analyses = analyze_matches(matches, family_ids, state['selected_days'])
+        analyses = analyze_matches(matches, family_ids, state['selected_days'], partite_quote)
         
         if not analyses:
             send_message(chat_id, f"📅 *Nessuna partita nei prossimi {state['selected_days']} giorni.*", parse_mode='Markdown')
@@ -1072,7 +920,7 @@ def handle_confirm_analysis(chat_id: str):
         
     except Exception as e:
         error_msg = f"❌ *Errore:* {str(e)[:100]}"
-        logger.error(f"Errore: {e}")
+        logger.error(f"Errore: {e}\n{traceback.format_exc()}")
         send_message(chat_id, error_msg, parse_mode='Markdown')
 
 def handle_cancel_analysis(chat_id: str):
@@ -1080,13 +928,7 @@ def handle_cancel_analysis(chat_id: str):
 
 def handle_new_search(chat_id: str):
     if chat_id in user_states:
-        user_states[chat_id] = {
-            'step': 'splash',
-            'giocate': [],
-            'selected_days': 3,
-            'selected_count': 5
-        }
-    
+        user_states[chat_id] = {'step': 'splash', 'giocate': [], 'selected_days': 3, 'selected_count': 5}
     send_splashscreen(chat_id)
 
 # ============================================================
@@ -1108,7 +950,6 @@ def webhook():
             message = data['message']
             chat_id = str(message['chat']['id'])
             text = message.get('text', '')
-            
             if text == '/start':
                 handle_start(chat_id)
             else:
@@ -1125,16 +966,11 @@ def webhook():
             except:
                 pass
             
-            if callback_data == 'start_setup':
-                handle_start_setup(chat_id)
-            elif callback_data == 'show_info':
-                handle_info(chat_id)
-            elif callback_data == 'new_search':
-                handle_new_search(chat_id)
-            elif callback_data == 'confirm_analysis':
-                handle_confirm_analysis(chat_id)
-            elif callback_data == 'cancel_analysis':
-                handle_cancel_analysis(chat_id)
+            if callback_data == 'start_setup': handle_start_setup(chat_id)
+            elif callback_data == 'show_info': handle_info(chat_id)
+            elif callback_data == 'new_search': handle_new_search(chat_id)
+            elif callback_data == 'confirm_analysis': handle_confirm_analysis(chat_id)
+            elif callback_data == 'cancel_analysis': handle_cancel_analysis(chat_id)
             elif callback_data == 'count_confirm':
                 if chat_id in user_states and user_states[chat_id].get('selected_count'):
                     handle_count_selection(chat_id, user_states[chat_id]['selected_count'])
@@ -1145,25 +981,14 @@ def webhook():
                 if family_id in FAMIGLIE_GIOCATE:
                     handle_family_selection(chat_id, family_id)
             elif callback_data.startswith('days_'):
-                days = int(callback_data[5:])
-                handle_days_selection(chat_id, days)
+                handle_days_selection(chat_id, int(callback_data[5:]))
             elif callback_data.startswith('count_'):
-                if callback_data == 'count_10':
-                    count = 10
-                else:
-                    count = int(callback_data[6:])
+                if callback_data == 'count_10': count = 10
+                else: count = int(callback_data[6:])
                 if chat_id in user_states:
                     state = user_states[chat_id]
                     state['selected_count'] = count
-                    text = f"""📋 *RIEPILOGO*
-
-Giocata 1: {FAMIGLIE_GIOCATE[state['giocate'][0]]['label']}
-Giocata 2: {FAMIGLIE_GIOCATE[state['giocate'][1]]['label']}
-Giocata 3: {FAMIGLIE_GIOCATE[state['giocate'][2]]['label']}
-📅 Giorni: {state['selected_days']}
-🔢 Partite: {count}
-
-Confermi?"""
+                    text = f"📋 *RIEPILOGO*\n\nGiocate: {', '.join(FAMIGLIE_GIOCATE[g]['label'] for g in state['giocate'])}\n📅 Giorni: {state['selected_days']}\n🔢 Partite: {count}\n\nConfermi?"
                     keyboard = create_inline_keyboard([
                         {'text': '✅ CONFERMA', 'callback_data': 'confirm_analysis'},
                         {'text': '❌ ANNULLA', 'callback_data': 'cancel_analysis'}

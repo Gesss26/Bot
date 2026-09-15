@@ -10,11 +10,25 @@ import re
 import json
 import traceback
 
+# Importa il modulo quote
+from quote_utils import (
+    load_quote_from_github,
+    trova_quota_per_giocata,
+    calcola_value_bet,
+    FAMIGLIE_GIOCATE as _  # placeholder, non serve
+) if False else None
+
+from quote_utils import (
+    load_quote_from_github,
+    trova_quota_per_giocata,
+    calcola_value_bet,
+)
+
 # ============================================================
 # CONFIGURAZIONE
 # ============================================================
 
-TOKEN = "8988939918:AAHJGxYPnfz6BUtiuGfYcVfdTM88pEayOB0"
+TOKEN = "8889221419:AAEgOICSM7aLhVGBoFEDs8e-CKW5zKCExVc"
 EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/excel/GesssAI_Input.xlsx"
 
 # ============================================================
@@ -48,15 +62,22 @@ class Match:
 @dataclass
 class Giocata:
     famiglia: str
+    family_id: str
     label: str
     pct: int
     is_bomb: bool
+    quota: Optional[float] = None
+    edge: Optional[float] = None
+    quota_fair: Optional[float] = None
+    kelly: Optional[float] = None
+    classificazione: Optional[str] = None
 
 @dataclass
 class MatchAnalysis:
     match: Match
-    giocata: Giocata
+    giocate: List[Giocata]
     score: int
+    has_bomb: bool
     home_form: Dict
     away_form: Dict
 
@@ -93,6 +114,20 @@ FAMIGLIE_LIST = [
 ]
 
 user_states = {}
+
+# Cache quote in memoria (evita di riscaricare il PDF a ogni richiesta)
+_quote_cache = {'partite': [], 'timestamp': 0}
+_QUOTE_CACHE_TTL = 3600  # 1 ora
+
+def get_quote_cached() -> List[Dict]:
+    """Restituisce le quote dalla cache o le ricarica se scadute"""
+    global _quote_cache
+    now = time.time()
+    if now - _quote_cache['timestamp'] > _QUOTE_CACHE_TTL or not _quote_cache['partite']:
+        logger.info("🔄 Ricarico quote...")
+        _quote_cache['partite'] = load_quote_from_github()
+        _quote_cache['timestamp'] = now
+    return _quote_cache['partite']
 
 # ============================================================
 # FUNZIONI DI UTILITÀ
@@ -135,30 +170,24 @@ def get_today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 def is_match_future(match: Match) -> bool:
-    """Verifica se la partita è futura rispetto all'orario corrente"""
     if match.stato != "Futura":
         return False
     
     try:
-        # Combina data e ora
         match_datetime_str = f"{match.data} {match.ora}"
-        # Prova diversi formati di ora
         for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H", "%Y-%m-%d"]:
             try:
                 match_datetime = datetime.strptime(match_datetime_str, fmt)
-                # Se l'ora non è specificata, considera mezzogiorno come default
                 if fmt == "%Y-%m-%d":
                     match_datetime = match_datetime.replace(hour=12, minute=0)
                 return match_datetime > datetime.now()
             except ValueError:
                 continue
         
-        # Se non riesce a parsare, considera la data
         match_date = datetime.strptime(match.data, "%Y-%m-%d")
         return match_date >= datetime.now().date()
     except Exception as e:
         logger.warning(f"Errore nel filtraggio ora per {match.casa} vs {match.ospiti}: {e}")
-        # Fallback: considera solo la data
         try:
             match_date = datetime.strptime(match.data, "%Y-%m-%d")
             return match_date >= datetime.now().date()
@@ -170,7 +199,6 @@ def is_match_future(match: Match) -> bool:
 # ============================================================
 
 def load_excel_from_github() -> Optional[pd.DataFrame]:
-    """Carica il file Excel dal repository GitHub"""
     try:
         logger.info(f"📂 Caricamento Excel da: {EXCEL_URL}")
         response = requests.get(EXCEL_URL, timeout=30)
@@ -386,16 +414,10 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
     ng = 100 - gg
     
     return {
-        'p1': round(p1),
-        'pX': round(pX),
-        'p2': round(p2),
-        'p1X': round(p1X),
-        'p12': round(p12),
-        'pX2': round(pX2),
-        'gg': round(gg),
-        'ng': round(ng),
-        'under_over': under_over,
-        'total_games': total
+        'p1': round(p1), 'pX': round(pX), 'p2': round(p2),
+        'p1X': round(p1X), 'p12': round(p12), 'pX2': round(pX2),
+        'gg': round(gg), 'ng': round(ng),
+        'under_over': under_over, 'total_games': total
     }
 
 # ============================================================
@@ -416,34 +438,20 @@ def get_giocata_pct(giocata: str, stats: Dict) -> int:
     ng = stats.get('ng', 0)
     under_over = stats.get('under_over', [])
     
-    if giocata == '1':
-        return p1
-    if giocata == 'X':
-        return pX
-    if giocata == '2':
-        return p2
-    if giocata == '1X':
-        return p1X
-    if giocata == '12':
-        return p12
-    if giocata == 'X2':
-        return pX2
-    if giocata == 'GG':
-        return gg
-    if giocata == 'NG':
-        return ng
-    if giocata == 'Over 1.5':
-        return under_over[0]['over'] if len(under_over) > 0 else 0
-    if giocata == 'Over 2.5':
-        return under_over[1]['over'] if len(under_over) > 1 else 0
-    if giocata == 'Under 1.5':
-        return under_over[0]['under'] if len(under_over) > 0 else 0
-    if giocata == 'Under 2.5':
-        return under_over[1]['under'] if len(under_over) > 1 else 0
-    if giocata == 'Under 3.5':
-        return under_over[2]['under'] if len(under_over) > 2 else 0
-    if giocata == 'Under 4.5':
-        return under_over[3]['under'] if len(under_over) > 3 else 0
+    if giocata == '1': return p1
+    if giocata == 'X': return pX
+    if giocata == '2': return p2
+    if giocata == '1X': return p1X
+    if giocata == '12': return p12
+    if giocata == 'X2': return pX2
+    if giocata == 'GG': return gg
+    if giocata == 'NG': return ng
+    if giocata == 'Over 1.5': return under_over[0]['over'] if len(under_over) > 0 else 0
+    if giocata == 'Over 2.5': return under_over[1]['over'] if len(under_over) > 1 else 0
+    if giocata == 'Under 1.5': return under_over[0]['under'] if len(under_over) > 0 else 0
+    if giocata == 'Under 2.5': return under_over[1]['under'] if len(under_over) > 1 else 0
+    if giocata == 'Under 3.5': return under_over[2]['under'] if len(under_over) > 2 else 0
+    if giocata == 'Under 4.5': return under_over[3]['under'] if len(under_over) > 3 else 0
     
     if giocata.startswith('1X+O'):
         over = giocata.replace('1X+O', 'Over ')
@@ -491,17 +499,18 @@ def get_best_bet_for_family(family_id: str, stats: Dict) -> Optional[Dict]:
     
     return None
 
-def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> List[MatchAnalysis]:
-    # Filtra per stato futuro
+def analyze_matches(matches: List[Match], family_id: str, days_range: int,
+                    partite_quote: List[Dict] = None) -> List[MatchAnalysis]:
+    if partite_quote is None:
+        partite_quote = []
+    
     future_matches = [m for m in matches if m.stato == "Futura"]
     today = get_today_str()
     limit_date = (datetime.now() + timedelta(days=days_range)).strftime("%Y-%m-%d")
     future_matches = [m for m in future_matches if m.data >= today and m.data <= limit_date]
-    
-    # FILTRA PER ORARIO - ESCLUDE PARTITE GIA' INIZIATE O PASSATE
     future_matches = [m for m in future_matches if is_match_future(m)]
     
-    logger.info(f"🔍 Trovate {len(future_matches)} partite future (filtrate per data e ora) fino al {limit_date}")
+    logger.info(f"🔍 Trovate {len(future_matches)} partite future fino al {limit_date}")
     
     results = []
     
@@ -517,17 +526,38 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
         if not best:
             continue
         
+        # Calcola quota e value bet
+        quota = trova_quota_per_giocata(match, family_id, best['giocata'], partite_quote)
+        edge = None
+        quota_fair = None
+        kelly = None
+        classificazione = None
+        
+        if quota:
+            vb = calcola_value_bet(best['pct'], quota)
+            edge = vb['edge']
+            quota_fair = vb['quota_fair']
+            kelly = vb['kelly']
+            classificazione = vb['classificazione']
+        
         giocata = Giocata(
             famiglia=best['family_label'],
+            family_id=family_id,
             label=best['giocata'],
             pct=best['pct'],
-            is_bomb=best['is_bomb']
+            is_bomb=best['is_bomb'],
+            quota=quota,
+            edge=edge,
+            quota_fair=quota_fair,
+            kelly=kelly,
+            classificazione=classificazione,
         )
         
         results.append(MatchAnalysis(
             match=match,
-            giocata=giocata,
+            giocate=[giocata],
             score=best['pct'],
+            has_bomb=best['is_bomb'],
             home_form=home_form,
             away_form=away_form
         ))
@@ -541,7 +571,6 @@ def analyze_matches(matches: List[Match], family_id: str, days_range: int) -> Li
 # ============================================================
 
 def send_telegram_message(chat_id: str, text: str, parse_mode: str = 'HTML', reply_markup: dict = None) -> bool:
-    """Invia un messaggio e restituisce True se ha successo"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
     if reply_markup:
@@ -592,11 +621,10 @@ def create_count_keyboard() -> dict:
     return create_inline_keyboard(buttons)
 
 # ============================================================
-# GENERAZIONE REPORT - CORRETTA
+# GENERAZIONE REPORT
 # ============================================================
 
 def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
-    """Genera il report in formato HTML per Telegram"""
     if not analyses:
         return "<b>📅 Nessuna partita trovata nei giorni selezionati.</b>"
     
@@ -612,9 +640,8 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
     
     for i, analysis in enumerate(top, 1):
         match = analysis.match
-        g = analysis.giocata
+        g = analysis.giocate[0]
         
-        # Colore in base alla percentuale
         if g.pct >= 90:
             color = '#f39c12'
             emoji = '💣'
@@ -637,6 +664,19 @@ def generate_report(analyses: List[MatchAnalysis], count: int) -> str:
         lines.append(f"⚽ xG: {match.casa} {analysis.home_form['media_gol_fatti']} | {match.ospiti} {analysis.away_form['media_gol_fatti']}")
         lines.append("")
         lines.append(f"🎯 <b>{g.famiglia}</b>: {g.label} {emoji} <b><font color='{color}'>{g.pct}%</font></b>{bomb}")
+        
+        # Riga quota + value bet
+        if g.quota:
+            edge_str = f"{g.edge:+.1f}%" if g.edge is not None else "N/D"
+            edge_emoji = "💎" if g.edge and g.edge > 20 else "✅" if g.edge and g.edge > 10 else "🟡" if g.edge and g.edge > 5 else "⚪"
+            lines.append(f"💰 Quota: <b>{g.quota}</b> | Fair: {g.quota_fair} | Edge: {edge_str} {edge_emoji}")
+            if g.kelly and g.kelly > 0:
+                lines.append(f"📈 Kelly: {g.kelly}%")
+            if g.classificazione and g.edge and g.edge > 5:
+                lines.append(f"{g.classificazione}")
+        else:
+            lines.append("💰 Quota: non disponibile")
+        
         lines.append(f"📊 Score: {analysis.score}%")
         
         if i < len(top):
@@ -671,13 +711,17 @@ def handle_start(chat_id: str):
     
     text = """<b>🤖 GesssAI-Pro Bot</b>
 
-Benvenuto! Scegli una famiglia di giocate e ti mostrerò le migliori partite.
+Benvenuto! Scegli una famiglia di giocate e ti mostrerò le migliori partite con <b>quote e value bet</b>.
 
 <b>📋 Come funziona:</b>
 
 1️⃣ <b>Scegli 1 famiglia</b> di giocate
 2️⃣ <b>Scegli il range di giorni</b> (1-5)
-3️⃣ <b>Scegli quante partite</b> vedere (1-10)"""
+3️⃣ <b>Scegli quante partite</b> vedere (1-10)
+
+💎 <b>Value Bet</b>: edge > 20%
+✅ <b>Buon value</b>: edge > 10%
+🟡 <b>Marginale</b>: edge > 5%"""
 
     keyboard = create_inline_keyboard([{'text': '🎯 INIZIA', 'callback_data': 'start_setup'}])
     send_telegram_message(chat_id, text, reply_markup=keyboard)
@@ -734,11 +778,10 @@ def handle_count_selection(chat_id: str, count: int):
     state = user_states[chat_id]
     state.selected_count = count
     
-    # Invia messaggio di caricamento
-    send_telegram_message(chat_id, "⏳ <b>Caricamento dati in corso...</b>")
+    send_telegram_message(chat_id, "⏳ <b>Caricamento dati e quote in corso...</b>")
     
     try:
-        # Carica i dati
+        # Carica Excel
         df = load_excel_from_github()
         if df is None:
             send_telegram_message(chat_id, "❌ <b>Errore:</b> Impossibile caricare il file Excel.")
@@ -751,17 +794,19 @@ def handle_count_selection(chat_id: str, count: int):
         
         logger.info(f"📊 Caricate {len(matches)} partite totali")
         
+        # Carica quote (con cache)
+        partite_quote = get_quote_cached()
+        logger.info(f"💰 Quote disponibili per {len(partite_quote)} partite")
+        
         # Analizza
-        analyses = analyze_matches(matches, state.selected_family, state.selected_days)
+        analyses = analyze_matches(matches, state.selected_family, state.selected_days, partite_quote)
         
         if not analyses:
             send_telegram_message(chat_id, f"📅 <b>Nessuna partita nei prossimi {state.selected_days} giorni.</b>")
             return
         
-        # Genera report
         report = generate_report(analyses, count)
         
-        # Invia report (con split se troppo lungo)
         if len(report) > 4000:
             chunks = [report[i:i+4000] for i in range(0, len(report), 4000)]
             for chunk in chunks:
@@ -769,15 +814,14 @@ def handle_count_selection(chat_id: str, count: int):
         else:
             send_telegram_message(chat_id, report)
         
-        # Pulsante nuova ricerca
         keyboard = create_inline_keyboard([
             {'text': '🔄 NUOVA RICERCA', 'callback_data': 'new_search'}
         ])
         send_telegram_message(chat_id, "✅ <b>Analisi completata!</b>", reply_markup=keyboard)
         
     except Exception as e:
-        error_msg = f"❌ <b>Errore:</b> {str(e)}\n\n{traceback.format_exc()[:200]}"
-        logger.error(f"Errore: {e}")
+        error_msg = f"❌ <b>Errore:</b> {str(e)}"
+        logger.error(f"Errore: {e}\n{traceback.format_exc()}")
         send_telegram_message(chat_id, error_msg)
 
 def handle_new_search(chat_id: str):
@@ -807,7 +851,6 @@ def handle_update(update: dict):
             chat_id = str(callback['message']['chat']['id'])
             data = callback['data']
             
-            # Rispondi al callback per rimuovere il loading
             try:
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", 
                              json={'callback_query_id': callback['id']}, timeout=5)

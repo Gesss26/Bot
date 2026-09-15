@@ -4,3 +4,4 @@ openpyxl
 xlsxwriter
 flask
 gunicorn
+pdfplumber
