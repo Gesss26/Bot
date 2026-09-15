@@ -9,7 +9,7 @@
 import re
 import logging
 import unicodedata
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from io import BytesIO
 from datetime import datetime
 import requests
@@ -164,6 +164,7 @@ _SUFFISSI_SOCIETARI = re.compile(
     r'1919|1929|1937|1908|1911|u23|u21|u19|cf|sk|sv|sc|vv|kvc|fk|bk|if|ff|cd|sd|ud|rc|rcd|afc|cfc)\b'
 )
 
+
 def normalizza_nome(nome: str) -> str:
     """Normalizza il nome della squadra per il matching"""
     if not nome:
@@ -181,6 +182,7 @@ def normalizza_nome(nome: str) -> str:
     if n in TRADUZIONI_SQUADRE:
         n = TRADUZIONI_SQUADRE[n]
     return n
+
 
 def similarita(a: str, b: str) -> float:
     """Calcola la similarità tra due stringhe (Dice coefficient su bigrammi)"""
@@ -205,6 +207,7 @@ MESI = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
 MESI_NUM = {'gennaio': 1, 'febbraio': 2, 'marzo': 3, 'aprile': 4, 'maggio': 5, 'giugno': 6,
             'luglio': 7, 'agosto': 8, 'settembre': 9, 'ottobre': 10, 'novembre': 11, 'dicembre': 12}
 
+
 def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
     """Estrae le righe di testo dal PDF con pdfplumber"""
     try:
@@ -212,7 +215,7 @@ def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
     except ImportError:
         logger.error("❌ pdfplumber non installato. Aggiungi 'pdfplumber' a requirements.txt")
         return []
-    
+
     righe = []
     try:
         with pdfplumber.open(BytesIO(contenuto_pdf)) as pdf:
@@ -226,8 +229,9 @@ def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
     except Exception as e:
         logger.error(f"❌ Errore estrazione PDF: {e}")
         return []
-    
+
     return righe
+
 
 def is_intestazione_campionato(testo: str) -> Optional[str]:
     """Riconosce un'intestazione di campionato"""
@@ -239,28 +243,30 @@ def is_intestazione_campionato(testo: str) -> Optional[str]:
         return None
     return testo.strip()
 
+
 def is_riga_data(testo: str) -> Optional[str]:
     """Riconosce una riga data e restituisce la data ISO (YYYY-MM-DD)"""
     pattern = r'^(' + '|'.join(GIORNI) + r')\s+(\d{1,2})\s+(' + '|'.join(MESI) + r')'
     match = re.match(pattern, testo, re.IGNORECASE)
     if not match:
         return None
-    
+
     giorno = match.group(2).zfill(2)
     mese = MESI_NUM.get(match.group(3).lower(), 1)
     mese_str = str(mese).zfill(2)
-    
+
     oggi = datetime.now()
     anno = oggi.year
     mese_corrente = oggi.month
-    
+
     # Gestione Dicembre/Gennaio
     if mese_corrente == 1 and mese == 12:
         anno = oggi.year - 1
     elif mese < mese_corrente - 1:
         anno = oggi.year + 1
-    
+
     return f"{anno}-{mese_str}-{giorno}"
+
 
 def parse_riga_partita(testo: str) -> Optional[Dict]:
     """Parsa una riga partita del PDF Marathonbet"""
@@ -268,31 +274,31 @@ def parse_riga_partita(testo: str) -> Optional[Dict]:
     match = re.match(pattern, testo)
     if not match:
         return None
-    
+
     alias, ora, resto = match.groups()
-    
+
     quote_pattern = re.findall(r'\d+\.\d+', resto)
     if len(quote_pattern) < 3:
         return None
-    
+
     quote = [float(q) for q in quote_pattern]
-    
+
     prima_quota = resto.find(quote_pattern[0])
     evento_raw = resto[:prima_quota].strip()
-    
+
     sep_idx = evento_raw.rfind(' - ')
     if sep_idx == -1:
         return None
-    
+
     casa = evento_raw[:sep_idx].strip()
-    ospiti = evento_raw[sep_idx+3:].strip()
-    
+    ospiti = evento_raw[sep_idx + 3:].strip()
+
     if not casa or not ospiti:
         return None
-    
+
     def q(idx):
         return quote[idx] if len(quote) > idx else None
-    
+
     quote_mappate = {
         '1': q(0), 'X': q(1), '2': q(2),
         '1X': q(3), '12': q(4), 'X2': q(5),
@@ -304,7 +310,7 @@ def parse_riga_partita(testo: str) -> Optional[Dict]:
         'MG14_SI': q(16), 'MG14_NO': q(17),
         'MG25_SI': q(18), 'MG25_NO': q(19),
     }
-    
+
     return {
         'alias': alias,
         'ora': ora,
@@ -313,29 +319,30 @@ def parse_riga_partita(testo: str) -> Optional[Dict]:
         'quote': quote_mappate,
     }
 
+
 def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
     """Parsa tutte le righe del PDF e restituisce le partite con le quote"""
     partite = []
     campionato_corrente = None
     data_corrente = None
     data_iso_corrente = None
-    
+
     for riga in righe:
         camp = is_intestazione_campionato(riga)
         if camp:
             campionato_corrente = camp
             continue
-        
+
         data_iso = is_riga_data(riga)
         if data_iso:
             data_corrente = riga
             data_iso_corrente = data_iso
             continue
-        
+
         # Salta intestazioni tabella
         if re.match(r'^(Alias|Codice|Evento|Calcio|1X2|DOPPIA|GG/NG|U/O|MG|SI|NO)', riga, re.IGNORECASE):
             continue
-        
+
         partita = parse_riga_partita(riga)
         if partita:
             partita['campionato'] = campionato_corrente
@@ -343,12 +350,13 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
             partita['dataISO'] = data_iso_corrente
             partita['fonte'] = 'Marathonbet'
             partite.append(partita)
-    
+
     return partite
 
 # ============================================================
 # CARICAMENTO QUOTE DA GITHUB
 # ============================================================
+
 
 def load_quote_from_github() -> List[Dict]:
     """Scarica e parsa il PDF delle quote da GitHub"""
@@ -358,12 +366,12 @@ def load_quote_from_github() -> List[Dict]:
         if response.status_code != 200:
             logger.error(f"❌ HTTP {response.status_code}")
             return []
-        
+
         righe = estrai_righe_da_pdf(response.content)
         if not righe:
             logger.error("❌ Nessuna riga estratta dal PDF")
             return []
-        
+
         partite = parse_marathonbet_pdf(righe)
         logger.info(f"✅ Caricate {len(partite)} partite con quote")
         return partite
@@ -390,76 +398,95 @@ _MAPPING_QUOTE = {
     ('multigol', '2-5'): 'MG25_SI',
 }
 
+
 def _trova_entry_quota(match, partite_quote: List[Dict]) -> Optional[Dict]:
     """Trova l'entry quota corrispondente a un match (fuzzy matching)"""
     if not partite_quote:
         return None
-    
+
     casa_norm = normalizza_nome(match.casa)
     ospiti_norm = normalizza_nome(match.ospiti)
-    
+
     best_match = None
     best_score = 0
-    
+
     for p in partite_quote:
         score_casa = similarita(casa_norm, normalizza_nome(p['casa']))
         score_ospiti = similarita(ospiti_norm, normalizza_nome(p['ospiti']))
         score = (score_casa + score_ospiti) / 2
-        
+
         if score > best_score and score > SOGLIA_MATCH_QUOTE:
             best_score = score
             best_match = p
-    
+
     return best_match
 
+
 def trova_quota_per_giocata(match, family_id: str, giocata: str,
-                             partite_quote: List[Dict]) -> Optional[float]:
-    """Trova la quota per una specifica partita e giocata"""
+                            partite_quote: List[Dict]) -> Optional[float]:
+    """
+    Trova la quota per una specifica partita e giocata.
+    Restituisce None se non trovata (il chiamante userà 1.00 come fallback).
+    """
     entry = _trova_entry_quota(match, partite_quote)
     if not entry:
         return None
-    
+
     quote = entry['quote']
-    
+
     # Mapping diretto
     key = (family_id, giocata)
     if key in _MAPPING_QUOTE:
         return quote.get(_MAPPING_QUOTE[key])
-    
+
     # DC+Over (es. 1X+O2.5)
     if family_id == 'dc_over' and '+' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2:
             dc_q = quote.get(parts[0])
-            over_key = parts[1].replace('O', 'O')  # es. O2.5
+            over_key = parts[1]  # es. O2.5
             over_q = quote.get(over_key)
             if dc_q and over_q:
                 return round(dc_q * over_q, 2)
-    
+
     # DC+Under (es. 1X+U2.5)
     if family_id == 'dc_under' and '+' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2:
             dc_q = quote.get(parts[0])
-            under_key = parts[1].replace('U', 'U')  # es. U2.5
+            under_key = parts[1]  # es. U2.5
             under_q = quote.get(under_key)
             if dc_q and under_q:
                 return round(dc_q * under_q, 2)
-    
+
     return None
+
+
+def get_quota_or_fallback(match, family_id: str, giocata: str,
+                          partite_quote: List[Dict]) -> float:
+    """
+    Restituisce la quota se disponibile, altrimenti 1.00 (fallback).
+    Usata per il calcolo delle quote di colonna dove la quota mancante
+    non deve alterare il prodotto.
+    """
+    quota = trova_quota_per_giocata(match, family_id, giocata, partite_quote)
+    if quota is None or quota <= 1:
+        return 1.0
+    return quota
 
 # ============================================================
 # ANALISI VALUE BET
 # ============================================================
 
+
 def calcola_value_bet(pct_tua: float, quota_book: float) -> Dict:
     """
     Calcola edge, quota fair e Kelly stake.
-    
+
     Args:
         pct_tua: percentuale stimata (0-100)
         quota_book: quota bookmaker
-    
+
     Returns:
         Dict con edge, quota_fair, kelly, classificazione
     """
@@ -468,16 +495,16 @@ def calcola_value_bet(pct_tua: float, quota_book: float) -> Dict:
             'edge': 0, 'quota_fair': 0, 'kelly': 0,
             'is_value': False, 'classificazione': '⚪', 'livello': 'no-value'
         }
-    
+
     quota_fair = 100 / pct_tua
     edge = ((quota_book * pct_tua / 100) - 1) * 100
-    
+
     # Kelly stake: f = (b*p - q) / b
     b = quota_book - 1
     p = pct_tua / 100
     q = 1 - p
     kelly = max(0, (b * p - q) / b) if b > 0 else 0
-    
+
     if edge > 20:
         classificazione = '💎 VALUE ECCELLENTE'
         livello = 'excellent'
@@ -493,12 +520,155 @@ def calcola_value_bet(pct_tua: float, quota_book: float) -> Dict:
     else:
         classificazione = '🔴 No value'
         livello = 'no-value'
-    
+
     return {
         'edge': round(edge, 1),
         'quota_fair': round(quota_fair, 2),
         'kelly': round(kelly * 100, 2),
         'is_value': edge > 5,
+        'classificazione': classificazione,
+        'livello': livello,
+    }
+
+
+def calcola_quota_colonna(giocate: List[Dict]) -> Dict:
+    """
+    Calcola la quota totale di una colonna e le statistiche aggregate.
+
+    Args:
+        giocate: lista di dict con chiavi 'quota' (float o None), 'pct' (int)
+
+    Returns:
+        Dict con:
+        - quota_totale: prodotto delle quote (fallback 1.0 per mancanti)
+        - prob_combinata: prodotto delle probabilità in %
+        - edge: edge della colonna
+        - kelly: Kelly stake della colonna
+        - classificazione: stringa con emoji
+        - n_partite: numero di partite
+        - n_quote_mancanti: numero di quote mancanti
+    """
+    if not giocate:
+        return {
+            'quota_totale': 0, 'prob_combinata': 0, 'edge': 0,
+            'kelly': 0, 'classificazione': '⚪ N/D', 'livello': 'no-value',
+            'n_partite': 0, 'n_quote_mancanti': 0,
+        }
+
+    quota_totale = 1.0
+    prob_combinata_dec = 1.0
+    n_mancanti = 0
+
+    for g in giocate:
+        quota = g.get('quota')
+        if quota is None or quota <= 1:
+            quota = 1.0
+            n_mancanti += 1
+        quota_totale *= quota
+
+        pct = g.get('pct', 0) / 100
+        prob_combinata_dec *= pct
+
+    prob_combinata = prob_combinata_dec * 100
+
+    # Edge
+    if quota_totale > 1 and prob_combinata > 0:
+        edge = ((quota_totale * prob_combinata / 100) - 1) * 100
+    else:
+        edge = 0
+
+    # Kelly
+    b = quota_totale - 1
+    p = prob_combinata_dec
+    q = 1 - p
+    kelly = max(0, (b * p - q) / b) if b > 0 else 0
+
+    if edge > 20:
+        classificazione = '💎 VALUE ECCELLENTE'
+        livello = 'excellent'
+    elif edge > 10:
+        classificazione = '✅ VALUE BUONO'
+        livello = 'good'
+    elif edge > 5:
+        classificazione = '🟡 VALUE MARGINALE'
+        livello = 'marginal'
+    elif edge > 0:
+        classificazione = '⚪ Quota fair'
+        livello = 'fair'
+    else:
+        classificazione = '🔴 No value'
+        livello = 'no-value'
+
+    return {
+        'quota_totale': round(quota_totale, 2),
+        'prob_combinata': round(prob_combinata, 2),
+        'edge': round(edge, 1),
+        'kelly': round(kelly * 100, 2),
+        'classificazione': classificazione,
+        'livello': livello,
+        'n_partite': len(giocate),
+        'n_quote_mancanti': n_mancanti,
+    }
+
+
+def calcola_quota_sistema(colonne: List[Dict]) -> Dict:
+    """
+    Calcola la quota del sistema completo (prodotto delle quote delle colonne).
+
+    Args:
+        colonne: lista di dict restituiti da calcola_quota_colonna()
+
+    Returns:
+        Dict con quota_sistema, prob_sistema, edge_sistema, kelly_sistema, classificazione
+    """
+    if not colonne:
+        return {
+            'quota_sistema': 0, 'prob_sistema': 0, 'edge_sistema': 0,
+            'kelly_sistema': 0, 'classificazione': '⚪ N/D', 'livello': 'no-value',
+        }
+
+    quota_sistema = 1.0
+    prob_sistema_dec = 1.0
+
+    for c in colonne:
+        if c['quota_totale'] > 0:
+            quota_sistema *= c['quota_totale']
+        if c['prob_combinata'] > 0:
+            prob_sistema_dec *= (c['prob_combinata'] / 100)
+
+    prob_sistema = prob_sistema_dec * 100
+
+    if quota_sistema > 1 and prob_sistema > 0:
+        edge_sistema = ((quota_sistema * prob_sistema / 100) - 1) * 100
+    else:
+        edge_sistema = 0
+
+    b = quota_sistema - 1
+    p = prob_sistema_dec
+    q = 1 - p
+    kelly_sistema = max(0, (b * p - q) / b) if b > 0 else 0
+
+    if edge_sistema > 20:
+        classificazione = '💎 VALUE ECCELLENTE'
+        livello = 'excellent'
+    elif edge_sistema > 10:
+        classificazione = '✅ VALUE BUONO'
+        livello = 'good'
+    elif edge_sistema > 5:
+        classificazione = '🟡 VALUE MARGINALE'
+        livello = 'marginal'
+    elif edge_sistema > 0:
+        classificazione = '⚪ Quota fair'
+        livello = 'fair'
+    else:
+        classificazione = '🔴 No value'
+        livello = 'no-value'
+
+    return {
+        'quota_sistema': round(quota_sistema, 2),
+        'prob_sistema': round(prob_sistema, 2),
+        'edge_sistema': round(edge_sistema, 1),
+        'kelly_sistema': round(kelly_sistema * 100, 2),
         'classificazione': classificazione,
         'livello': livello,
     }
