@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 QUOTE_PDF_URLS = [
-    "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/quote/marathonbet.pdf",
-    "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/quote/marathonbet-2.pdf",
+    "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/quote/marathonbet.pdf",
+    "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/quote/marathonbet-2.pdf",
 ]
 SOGLIA_MATCH_QUOTE = 0.62
 

@@ -31,8 +31,8 @@ app = Flask(__name__)
 # ============================================================
 
 TOKEN = "8889221419:AAEgOICSM7aLhVGBoFEDs8e-CKW5zKCExVc"
-EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/excel/GesssAI_Input.xlsx"
-SPLASH_URL = "https://raw.githubusercontent.com/Gesss26/Bot/main/Splashscreen.png"
+EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/excel/GesssAI_Input.xlsx"
+SPLASH_URL = "https://raw.githubusercontent.com/Gesss26/Bot/master/Splashscreen.png"
 
 # ============================================================
 # LOGGING
