@@ -5,3 +5,4 @@ xlsxwriter
 flask
 gunicorn
 pdfplumber
+pypdf
