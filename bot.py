@@ -10,7 +10,7 @@ import re
 import json
 import traceback
 
-# Importa il modulo quote (v3 - multi-PDF)
+# Importa il modulo quote (v5 - parser one-line)
 from quote_utils import (
     load_quote_from_github,
     trova_quota_per_giocata,
@@ -807,9 +807,12 @@ class UserState:
 # ============================================================
 
 def handle_start(chat_id: str):
+    """Reset dello stato e messaggio di benvenuto pulito"""
     user_states[chat_id] = UserState()
 
-    text = """<b>🤖 GesssAI-Pro Bot</b>
+    text = """<b>🔄 Reset completato</b>
+
+<b>🤖 GesssAI-Pro Bot</b>
 
 Benvenuto! Scegli <b>3 famiglie</b> di giocate e ti mostrerò le migliori partite con <b>quote e value bet</b>.
 
@@ -823,7 +826,9 @@ Benvenuto! Scegli <b>3 famiglie</b> di giocate e ti mostrerò le migliori partit
 ✅ <b>Buon value</b>: edge > 10%
 🟡 <b>Marginale</b>: edge > 5%
 
-🎫 <b>In fondo al report</b> troverai le quote totali di ogni colonna e del sistema completo!"""
+🎫 <b>In fondo al report</b> troverai le quote totali di ogni colonna e del sistema completo!
+
+⚠️ <b>Nota:</b> se una quota manca, viene sostituita con 1.00 per non annullare il calcolo."""
 
     keyboard = create_inline_keyboard([{'text': '🎯 INIZIA', 'callback_data': 'start_setup'}])
     send_telegram_message(chat_id, text, reply_markup=keyboard)
@@ -1057,7 +1062,7 @@ def run_polling():
 # ============================================================
 
 if __name__ == "__main__":
-    print("🤖 GesssAI-Pro Telegram Bot v3.0")
+    print("🤖 GesssAI-Pro Telegram Bot v5.0")
     print("=" * 50)
     print(f"📂 Excel: {EXCEL_URL}")
     print("")

@@ -1,7 +1,7 @@
 # ============================================================
 # quote_utils.py
 # Modulo condiviso per parsing quote Marathonbet (PDF)
-# Versione 4: pypdf-first (leggero) + multi-PDF + merge
+# Versione 5: parser one-line (formato reale Marathonbet)
 # ============================================================
 
 import re
@@ -30,7 +30,7 @@ SOGLIA_MATCH_QUOTE = 0.62
 # ============================================================
 
 TRADUZIONI_SQUADRE = {
-    # ============ SPAGNA ============
+    # Spagna
     'siviglia': 'sevilla', 'barcellona': 'barcelona', 'real madrid': 'realmadrid',
     'atletico madrid': 'atleticomadrid', 'athletic bilbao': 'athleticbilbao',
     'real betis': 'realbetis', 'real sociedad': 'realsociedad',
@@ -49,8 +49,9 @@ TRADUZIONI_SQUADRE = {
     'cartagena': 'cartagena', 'albacete': 'albacete', 'andorra': 'andorra',
     'burgos': 'burgos', 'ibiza': 'ibiza', 'leganes': 'leganes',
     'pontevedra': 'pontevedra', 'sabadell': 'sabadell', 'castellon': 'castellon',
+    'cordoba': 'cordoba', 'cordoba cf': 'cordoba',
 
-    # ============ ITALIA ============
+    # Italia
     'inter': 'inter', 'inter milano': 'intermilano', 'milan': 'milan',
     'ac milan': 'milan', 'juventus': 'juventus', 'napoli': 'napoli',
     'roma': 'roma', 'lazio': 'lazio', 'atalanta': 'atalanta',
@@ -81,7 +82,7 @@ TRADUZIONI_SQUADRE = {
     'turris': 'turris', 'viterbese': 'viterbese', 'messina': 'messina',
     'giugliano': 'giugliano', 'monterosi': 'monterosi', 'recina': 'recina',
 
-    # ============ INGHILTERRA ============
+    # Inghilterra
     'manchester united': 'manchesterunited', 'manchester city': 'manchestercity',
     'liverpool': 'liverpool', 'chelsea': 'chelsea', 'arsenal': 'arsenal',
     'tottenham': 'tottenham', 'tottenham hotspur': 'tottenham',
@@ -115,7 +116,7 @@ TRADUZIONI_SQUADRE = {
     'newport': 'newport', 'northampton': 'northampton', 'oldham': 'oldham',
     'port vale': 'portvale', 'rochdale': 'rochdale', 'swindon': 'swindon',
 
-    # ============ GERMANIA ============
+    # Germania
     'bayern monaco': 'bayernmonaco', 'bayern munich': 'bayernmonaco',
     'borussia dortmund': 'borussiadortmund', 'dortmund': 'borussiadortmund',
     'rb lipsia': 'rblipsia', 'leipzig': 'rblipsia',
@@ -136,12 +137,17 @@ TRADUZIONI_SQUADRE = {
     'nurnberg': 'nurnberg', 'norimberga': 'nurnberg',
     'paderborn': 'paderborn', 'sandhausen': 'sandhausen', 'darmstadt': 'darmstadt',
     'heidenheim': 'heidenheim', 'regensburg': 'regensburg', 'magdeburg': 'magdeburg',
-    'rostock': 'rostock', 'hansa rostock': 'hansarostock', 'braunschweig': 'braunschweig',
+    'magdeburgo': 'magdeburg', 'rostock': 'rostock', 'hansa rostock': 'hansarostock',
+    'braunschweig': 'braunschweig', 'eintracht braunschweig': 'eintrachtbraunschweig',
     'kiel': 'kiel', 'holstein kiel': 'holsteinkiel', 'bielefeld': 'bielefeld',
     'arminia bielefeld': 'arminiabielefeld', 'ingolstadt': 'ingolstadt',
     'wurzburg': 'wurzburg', 'wuerzburg': 'wurzburg',
+    'greuther furth': 'greutherfurth', 'furth': 'greutherfurth',
+    'kaiserslautern': 'kaiserslautern', 'osnabruck': 'osnabruck',
+    'vfl osnabruck': 'osnabruck', 'vfl 1899 osnabruck': 'osnabruck',
+    'sv darmstadt 98': 'darmstadt', 'darmstadt 98': 'darmstadt',
 
-    # ============ FRANCIA ============
+    # Francia
     'psg': 'psg', 'paris saint germain': 'psg', 'paris sg': 'psg',
     'marsiglia': 'marsiglia', 'marseille': 'marsiglia',
     'lione': 'lione', 'lyon': 'lione', 'olympique lyon': 'lione',
@@ -157,13 +163,18 @@ TRADUZIONI_SQUADRE = {
     'angers': 'angers', 'brest': 'brest', 'lorient': 'lorient',
     'troyes': 'troyes', 'auxerre': 'auxerre', 'ajaccio': 'ajaccio',
     'clermont': 'clermont', 'clermont foot': 'clermont',
-    'metz': 'metz', 'dijon': 'dijon', 'caen': 'caen',
+    'metz': 'metz', 'dijon': 'dijon', 'digione': 'dijon', 'caen': 'caen',
     'le havre': 'lehavre', 'amiens': 'amiens', 'grenoble': 'grenoble',
-    'guingamp': 'guingamp', 'nancy': 'nancy', 'niort': 'niort',
-    'paris fc': 'parisfc', 'pau': 'pau', 'quevilly': 'quevilly',
-    'rodez': 'rodez', 'sochaux': 'sochaux', 'valenciennes': 'valenciennes',
+    'grenoble foot 38': 'grenoble', 'guingamp': 'guingamp', 'nancy': 'nancy',
+    'niort': 'niort', 'paris fc': 'parisfc', 'pau': 'pau', 'pau fc': 'pau',
+    'quevilly': 'quevilly', 'rodez': 'rodez', 'rodez aveyron football': 'rodez',
+    'sochaux': 'sochaux', 'sochaux-montbeliard': 'sochaux',
+    'valenciennes': 'valenciennes', 'fc annecy': 'annecy', 'annecy': 'annecy',
+    'usl dunkerque': 'dunkerque', 'dunkerque': 'dunkerque',
+    'stade lavallois mfc': 'laval', 'laval': 'laval',
+    'us boulogne': 'boulogne', 'boulogne': 'boulogne',
 
-    # ============ PORTOGALLO ============
+    # Portogallo
     'benfica': 'benfica', 'porto': 'porto', 'fc porto': 'porto',
     'sporting lisbona': 'sportinglisbona', 'sporting lisbon': 'sportinglisbona',
     'sporting cp': 'sportinglisbona', 'braga': 'braga', 'sc braga': 'braga',
@@ -177,7 +188,7 @@ TRADUZIONI_SQUADRE = {
     'leixoes': 'leixoes', 'nacional': 'nacional', 'penafiel': 'penafiel',
     'tondela': 'tondela', 'vilafranquense': 'vilafranquense',
 
-    # ============ OLANDA ============
+    # Olanda
     'ajax': 'ajax', 'psv': 'psv', 'psv eindhoven': 'psv', 'feyenoord': 'feyenoord',
     'az alkmaar': 'azalkmaar', 'az': 'azalkmaar', 'twente': 'twente',
     'utrecht': 'utrecht', 'vitesse': 'vitesse', 'heerenveen': 'heerenveen',
@@ -187,14 +198,18 @@ TRADUZIONI_SQUADRE = {
     'fortuna sittard': 'fortunasittard', 'sittard': 'fortunasittard',
     'cambuur': 'cambuur', 'excelsior': 'excelsior', 'volendam': 'volendam',
     'emmen': 'emmen', 'almere city': 'almerecity', 'almere': 'almerecity',
-    'hercules': 'hercules', 'den bosch': 'denbosch', 'eindhoven': 'eindhoven',
+    'almere city fc': 'almerecity', 'hercules': 'hercules',
+    'den bosch': 'denbosch', 'eindhoven': 'eindhoven', 'fc eindhoven': 'eindhoven',
     'de graafschap': 'degraafschap', 'graafschap': 'degraafschap',
     'roda jc': 'rodajc', 'roda': 'rodajc', 'vvv venlo': 'vvvvenlo',
     'venlo': 'vvvvenlo', 'dordrecht': 'dordrecht', 'helmond sport': 'helmondsport',
-    'jong ajax': 'jongajax', 'jong psv': 'jongpsv', 'jong az': 'jongaz',
-    'jong utrecht': 'jongutrecht', 'jong twente': 'jongtwente',
+    'jong ajax': 'jongajax', 'jong ajax amsterdam': 'jongajax',
+    'jong psv': 'jongpsv', 'jong az': 'jongaz', 'jong az alkmaar': 'jongaz',
+    'jong utrecht': 'jongutrecht', 'jong fc utrecht': 'jongutrecht',
+    'jong twente': 'jongtwente', 'top oss': 'toposs', 'mvv maastricht': 'mvv',
+    'mvv': 'mvv', 'heracles': 'heracles', 'heracles almelo': 'heracles',
 
-    # ============ BELGIO ============
+    # Belgio
     'anderlecht': 'anderlecht', 'club bruges': 'clubbruges', 'bruges': 'clubbruges',
     'standard liegi': 'standardliegi', 'standard liege': 'standardliegi',
     'genk': 'genk', 'krc genk': 'genk', 'gent': 'gent', 'kaa gent': 'gent',
@@ -210,7 +225,7 @@ TRADUZIONI_SQUADRE = {
     'union saint gilloise': 'unionsaintgilloise', 'union sg': 'unionsaintgilloise',
     'rwdm': 'rwdm', 'molenbeek': 'rwdm',
 
-    # ============ SCOZIA ============
+    # Scozia
     'celtic': 'celtic', 'rangers': 'rangers', 'aberdeen': 'aberdeen',
     'hearts': 'hearts', 'heart of midlothian': 'hearts',
     'hibernian': 'hibernian', 'hibernians': 'hibernian',
@@ -224,12 +239,12 @@ TRADUZIONI_SQUADRE = {
     'ayr united': 'ayrunited', 'greenock morton': 'greenockmorton',
     'arbroath': 'arbroath', 'alloa': 'alloa', 'cove rangers': 'coverangers',
 
-    # ============ TURCHIA ============
+    # Turchia
     'galatasaray': 'galatasaray', 'fenerbahce': 'fenerbahce',
     'besiktas': 'besiktas', 'trabzonspor': 'trabzonspor',
     'basaksehir': 'basaksehir', 'istanbul basaksehir': 'basaksehir',
     'adana demirspor': 'adanademirspor', 'adana': 'adanademirspor',
-    'konyaspor': 'konyaspor', 'konya': 'konyaspor',
+    'konyaspor': 'konyaspor', 'konya': 'konyaspor', 'konyaspor club': 'konyaspor',
     'kayserispor': 'kayserispor', 'kayseri': 'kayserispor',
     'alanyaspor': 'alanyaspor', 'alanya': 'alanyaspor',
     'antalyaspor': 'antalyaspor', 'antalya': 'antalyaspor',
@@ -240,293 +255,6 @@ TRADUZIONI_SQUADRE = {
     'istanbulspor': 'istanbulspor', 'umraniye': 'umraniye',
     'pendikspor': 'pendikspor', 'samsunspor': 'samsunspor',
     'bodrum': 'bodrum', 'bodrumspor': 'bodrumspor',
-
-    # ============ GRECIA ============
-    'olympiakos': 'olympiakos', 'olympiacos': 'olympiakos',
-    'panathinaikos': 'panathinaikos', 'aek atene': 'aekatene',
-    'aek athens': 'aekatene', 'paok': 'paok', 'paok salonicco': 'paok',
-    'aris salonicco': 'arissalonicco', 'aris': 'arissalonicco',
-    'volos': 'volos', 'volos nfc': 'volos', 'of creta': 'ofcreta',
-    'asteras tripolis': 'asterastripolis', 'asteras': 'asterastripolis',
-    'atromitos': 'atromitos', 'ionikos': 'ionikos', 'lamia': 'lamia',
-    'levadiakos': 'levadiakos', 'panaitolikos': 'panaitolikos',
-    'panserraikos': 'panserraikos', 'kifisia': 'kifisia',
-
-    # ============ RUSSIA ============
-    'zenit': 'zenit', 'zenit san pietroburgo': 'zenit',
-    'spartak mosca': 'spartakmosca', 'spartak moscow': 'spartakmosca',
-    'cska mosca': 'cskamosca', 'cska moscow': 'cskamosca',
-    'lokomotiv mosca': 'lokomotivmosca', 'lokomotiv moscow': 'lokomotivmosca',
-    'dinamo mosca': 'dinamomosca', 'dinamo moscow': 'dinamomosca',
-    'krasnodar': 'krasnodar', 'rostov': 'rostov', 'rubin kazan': 'rubinkazan',
-    'kazan': 'rubinkazan', 'akhmat grozny': 'akhmatgrozny', 'grozny': 'akhmatgrozny',
-    'sochi': 'sochi', 'pfc sochi': 'sochi', 'ural': 'ural',
-    'ural ekaterinburg': 'ural', 'krylia sovetov': 'kryliasovetov',
-    'samara': 'kryliasovetov', 'orenburg': 'orenburg',
-    'fakel voronezh': 'fakelvoronezh', 'voronezh': 'fakelvoronezh',
-    'baltika': 'baltika', 'baltika kaliningrad': 'baltika',
-    'paris nn': 'parisnn', 'nizhny novgorod': 'parisnn',
-
-    # ============ UCRAINA ============
-    'shakhtar donetsk': 'shakhtardonetsk', 'shakhtar': 'shakhtardonetsk',
-    'dinamo kiev': 'dinamokiev', 'dynamo kyiv': 'dinamokiev',
-    'zorya luhansk': 'zoryaluhansk', 'zorya': 'zoryaluhansk',
-    'dnipro': 'dnipro', 'dnipro-1': 'dnipro1', 'vorskla': 'vorskla',
-    'vorskla poltava': 'vorskla', 'oleksandriya': 'oleksandriya',
-    'kolos kovalivka': 'koloskovalivka', 'kolos': 'koloskovalivka',
-    'rukh lviv': 'rukhlviv', 'lviv': 'rukhlviv', 'veres rivne': 'veresrivne',
-    'rivne': 'veresrivne', 'metalist': 'metalist', 'metalist kharkiv': 'metalist',
-    'minai': 'minai', 'inhulets': 'inhulet',
-    'chornomorets': 'chornomorets', 'odesa': 'chornomorets',
-
-    # ============ ALTRI EUROPA ============
-    # Austria
-    'salzburg': 'salzburg', 'rb salzburg': 'salzburg',
-    'sturm graz': 'sturmgraz', 'graz': 'sturmgraz',
-    'rapid vienna': 'rapidvienna', 'rapid wien': 'rapidvienna',
-    'austria vienna': 'austriavienna', 'austria wien': 'austriavienna',
-    'lask': 'lask', 'lask linz': 'lask', 'linz': 'lask',
-    'wolfsberger': 'wolfsberger', 'wolfsberg': 'wolfsberger',
-    'hartberg': 'hartberg', 'altach': 'altach', 'rheindorf altach': 'altach',
-    'ried': 'ried', 'klagenfurt': 'klagenfurt', 'austria klagenfurt': 'klagenfurt',
-    'tirol': 'tirol', 'wattens': 'wattens', 'wsg tirol': 'wattens',
-
-    # Svizzera
-    'young boys': 'youngboys', 'bsc young boys': 'youngboys',
-    'basilea': 'basilea', 'basel': 'basilea', 'fc basel': 'basilea',
-    'zurigo': 'zurigo', 'zurich': 'zurigo', 'fc zurich': 'zurigo',
-    'grasshopper': 'grasshopper', 'gc zurigo': 'grasshopper',
-    'servette': 'servette', 'lugano': 'lugano', 'lucerna': 'lucerna',
-    'luzern': 'lucerna', 'st gallen': 'stgallen', 'san gallo': 'stgallen',
-    'sion': 'sion', 'losanna': 'losanna', 'lausanne': 'losanna',
-    'thun': 'thun', 'winterthur': 'winterthur', 'yverdon': 'yverdon',
-    'stade lausanne': 'stadlausanne', 'lausanne ouchy': 'lausanneouchy',
-
-    # Danimarca
-    'copenhagen': 'copenhagen', 'fc copenhagen': 'copenhagen',
-    'brondby': 'brondby', 'midtjylland': 'midtjylland', 'fcm': 'midtjylland',
-    'aalborg': 'aalborg', 'randers': 'randers', 'nordsjaelland': 'nordsjaelland',
-    'agf': 'agf', 'aarhus': 'agf', 'ob': 'ob', 'odense': 'ob',
-    'silkeborg': 'silkeborg', 'viborg': 'viborg', 'vejle': 'vejle',
-    'lyngby': 'lyngby', 'horsens': 'horsens',
-
-    # Norvegia
-    'bodo glimt': 'bodoglimt', 'bodo': 'bodoglimt',
-    'molde': 'molde', 'rosenborg': 'rosenborg', 'viking': 'viking',
-    'viking stavanger': 'viking', 'brann': 'brann', 'lillestrom': 'lillestrom',
-    'valerenga': 'valerenga', 'tromso': 'tromso', 'sarpsborg': 'sarpsborg',
-    'stromsgodset': 'stromsgodset', 'haugesund': 'haugesund',
-    'kristiansund': 'kristiansund', 'hamkam': 'hamkam', 'sandefjord': 'sandefjord',
-    'odd': 'odd', 'odd greenland': 'odd', 'jerv': 'jerv',
-
-    # Svezia
-    'malmo': 'malmo', 'malmo ff': 'malmo', 'aik': 'aik', 'aik solna': 'aik',
-    'djurgarden': 'djurgarden', 'hammarby': 'hammarby', 'ifk goteborg': 'ifkgoteborg',
-    'goteborg': 'ifkgoteborg', 'elfsborg': 'elfsborg', 'hacken': 'hacken',
-    'norrkoping': 'norrkoping', 'kalmar': 'kalmar', 'mjallby': 'mjallby',
-    'varberg': 'varberg', 'degerfors': 'degerfors', 'sundsvall': 'sundsvall',
-    'helsingborg': 'helsingborg', 'halmstad': 'halmstad', 'sirius': 'sirius',
-    'varnamo': 'varnamo', 'brommapojkarna': 'brommapojkarna',
-
-    # Polonia
-    'legia varsavia': 'legiavarsavia', 'legia warsaw': 'legiavarsavia',
-    'lech poznan': 'lechpoznan', 'poznan': 'lechpoznan',
-    'wisla cracovia': 'wisplacracovia', 'wisla krakow': 'wisplacracovia',
-    'cracovia': 'cracovia', 'krakow': 'cracovia',
-    'gornik zabrze': 'gornikzabrze', 'zabrze': 'gornikzabrze',
-    'piast gliwice': 'piastgliwice', 'gliwice': 'piastgliwice',
-    'jagiellonia': 'jagiellonia', 'jagiellonia bialystok': 'jagiellonia',
-    'bialystok': 'jagiellonia', 'pogon szczecin': 'pogonszczecin',
-    'szczecin': 'pogonszczecin', 'slask wroclaw': 'slaskwroclaw',
-    'wroclaw': 'slaskwroclaw', 'radomiak': 'radomiak', 'radomiak radom': 'radomiak',
-    'radom': 'radomiak', 'widzew lodz': 'widzewlodz', 'lodz': 'widzewlodz',
-    'lks lodz': 'lkslodz', 'korona kielce': 'koronakielce', 'kielce': 'koronakielce',
-    'stala mielec': 'stalamielec', 'mielec': 'stalamielec',
-    'warta poznan': 'wartapoznan', 'ruch chorzow': 'ruchchorzow',
-    'chorzow': 'ruchchorzow', 'zaglebie lubin': 'zaglebielubin',
-    'lubin': 'zaglebielubin', 'nieciecza': 'nieciecza',
-
-    # Repubblica Ceca
-    'slavia praga': 'slaviapraga', 'slavia prague': 'slaviapraga',
-    'viktoria plzen': 'viktoriaplzen', 'plzen': 'viktoriaplzen',
-    'sparta praga': 'spartapraga', 'sparta prague': 'spartapraga',
-    'banik ostrava': 'banikostrava', 'ostrava': 'banikostrava',
-    'slovan liberec': 'slovanliberec', 'liberec': 'slovanliberec',
-    'jablonec': 'jablonec', 'mlada boleslav': 'mladaboleslav',
-    'bohemians 1905': 'bohemians1905', 'bohemians praga': 'bohemians1905',
-    'sigma olomouc': 'sigmaolomouc', 'olomouc': 'sigmaolomouc',
-    'teplice': 'teplice', 'zbrojovka brno': 'zbrojovkabrno', 'brno': 'zbrojovkabrno',
-    'karvina': 'karvina', 'pardubice': 'pardubice', 'hradec kralove': 'hradeckralove',
-    'ceske budovice': 'ceskebudovice', 'budovice': 'ceskebudovice',
-
-    # Croazia
-    'dinamo zagabria': 'dinamozagabria', 'dinamo zagreb': 'dinamozagabria',
-    'hajduk spalato': 'hajdukspalato', 'hajduk split': 'hajdukspalato',
-    'rijeka': 'rijeka', 'hajduk': 'hajdukspalato', 'lokomotiva zagabria': 'lokomotivazagabria',
-    'osijek': 'osijek', 'nkg osijek': 'osijek', 'gorica': 'gorica',
-    'istria': 'istria', 'istria 1961': 'istria', 'slaven belupo': 'slavenbelupo',
-    'belupo': 'slavenbelupo', 'varazdin': 'varazdin', 'sibenik': 'sibenik',
-
-    # Serbia
-    'stella rossa': 'stellrossa', 'crvena zvezda': 'stellrossa',
-    'partizan': 'partizan', 'partizan belgrado': 'partizan',
-    'vojvodina': 'vojvodina', 'vojvodina novi sad': 'vojvodina',
-    'cukaricki': 'cukaricki', 'radnicki nis': 'radnickinis', 'nis': 'radnickinis',
-    'spartak subotica': 'spartaksubotica', 'subotica': 'spartaksubotica',
-    'napredak': 'napredak', 'mladost lucani': 'mladostlucani',
-    'backa topola': 'backatopola', 'topola': 'backatopola',
-    'radnik': 'radnik', 'proleter': 'proleter', 'novi pazar': 'novipazar',
-
-    # Romania
-    'fcsb': 'fcsb', 'steaua': 'fcsb', 'steaua bucarest': 'fcsb',
-    'cfr cluj': 'cfrcluj', 'cluj': 'cfrcluj', 'universitatea craiova': 'universitateacraiova',
-    'craiova': 'universitateacraiova', 'rapid bucarest': 'rapidbucarest',
-    'dinamo bucarest': 'dinamobucarest', 'astra giurgiu': 'astragiurgiu',
-    'giurgiu': 'astragiurgiu', 'viitorul': 'viitorul', 'farul constanta': 'farulconstanta',
-    'constanta': 'farulconstanta', 'sepsi': 'sepsi', 'seps osfk': 'sepsi',
-    'botosani': 'botosani', 'fc botosani': 'botosani', 'gaz metan': 'gazmetan',
-    'medias': 'medias', 'chindia targoviste': 'chindiatargoviste',
-    'targoviste': 'chindiatargoviste', 'hermannstadt': 'hermannstadt',
-    'sibiu': 'hermannstadt', 'uta arad': 'utaarad', 'arad': 'utaarad',
-    'petrolul ploiesti': 'petrolulploiesti', 'ploiesti': 'petrolulploiesti',
-
-    # Ungheria
-    'ferencvaros': 'ferencvaros', 'ferencvaros budapest': 'ferencvaros',
-    'mol fehervar': 'molfehervar', 'fehervar': 'molfehervar',
-    'videoton': 'molfehervar', 'puskas akademia': 'puskasakademia',
-    'puskas': 'puskasakademia', 'ujpest': 'ujpest', 'ujpest fc': 'ujpest',
-    'honved': 'honved', 'budapest honved': 'honved', 'vidi': 'molfehervar',
-
-    # Bulgaria
-    'ludogorets': 'ludogorets', 'ludogorets razgrad': 'ludogorets',
-    'razgrad': 'ludogorets', 'cska sofia': 'cskasofia', 'sofia': 'cskasofia',
-    'levski sofia': 'levskisofia', 'levski': 'levskisofia',
-    'botev plovdiv': 'botevplovdiv', 'plovdiv': 'botevplovdiv',
-    'lokomotiv plovdiv': 'lokomotivplovdiv', 'cherno more': 'chernomore',
-    'cherno more varna': 'chernomore', 'varna': 'chernomore',
-
-    # Slovacchia
-    'slovan bratislava': 'slovanbratislava', 'bratislava': 'slovanbratislava',
-    'zilina': 'zilina', 'msk zilina': 'zilina', 'spartak trnava': 'spartaktrnava',
-    'trnava': 'spartaktrnava', 'dunajska streda': 'dunajskastreda',
-    'streda': 'dunajskastreda', 'trencin': 'trencin', 'as trencin': 'trencin',
-    'ruzomberok': 'ruzomberok', 'mfk ruzomberok': 'ruzomberok',
-    'pohronie': 'pohronie', 'zlate moravce': 'zlatemoravce',
-    'moravce': 'zlatemoravce', 'senica': 'senica', 'fk senica': 'senica',
-    'sere': 'sere', 'sport podbrezova': 'podbrezova', 'podbrezova': 'podbrezova',
-
-    # Slovenia
-    'maribor': 'maribor', 'nk maribor': 'maribor', 'olimpija ljubljana': 'olimpijaljubljana',
-    'ljubljana': 'olimpijaljubljana', 'olimpija': 'olimpijaljubljana',
-    'domzale': 'domzale', 'nk domzale': 'domzale', 'celje': 'celje',
-    'nk celje': 'celje', 'koper': 'koper', 'fc koper': 'koper',
-    'bravo': 'bravo', 'nk bravo': 'bravo', 'mura': 'mura', 'ns mura': 'mura',
-    'radomlje': 'radomlje', 'kalcer radomlje': 'radomlje',
-    'gorica': 'gorica', 'nd gorica': 'gorica', 'aluminij': 'aluminij',
-    'nk aluminij': 'aluminij', 'tabor': 'tabor', 'tabor sezana': 'tabor',
-
-    # Cipro
-    'apoel': 'apoel', 'apoel nicosia': 'apoel', 'nicosia': 'apoel',
-    'aek larnaca': 'aeklarnaca', 'larnaca': 'aeklarnaca',
-    'anorthosis': 'anorthosis', 'anorthosis famagosta': 'anorthosis',
-    'famagosta': 'anorthosis', 'apollon': 'apollon', 'apollon limassol': 'apollon',
-    'limassol': 'apollon', 'ael limassol': 'aellimassol', 'omonia': 'omonia',
-    'omonia nicosia': 'omonia', 'pafos': 'pafos', 'pafos fc': 'pafos',
-    'aris limassol': 'arisslimassol', 'doxa': 'doxa', 'doxa katokopias': 'doxa',
-
-    # Israele
-    'maccabi tel aviv': 'maccabitelaviv', 'tel aviv': 'maccabitelaviv',
-    'maccabi haifa': 'maccabihaifa', 'haifa': 'maccabihaifa',
-    'hapoel tel aviv': 'hapoeltelaviv', 'hapoel haifa': 'hapoelhaifa',
-    'hapoel beer sheva': 'hapoelbeersheva', 'beer sheva': 'hapoelbeersheva',
-    'beitar gerusalemme': 'beitargerusalemme', 'beitar jerusalem': 'beitargerusalemme',
-    'gerusalemme': 'beitargerusalemme', 'jerusalem': 'beitargerusalemme',
-    'bnei yehuda': 'bneiyehuda', 'bnei sakhnin': 'bneisakhnin',
-    'sakhnin': 'bneisakhnin', 'ashdod': 'ashdod', 'ms ashdod': 'ashdod',
-    'netanya': 'netanya', 'maccabi netanya': 'netanya',
-
-    # ============ SUD AMERICA ============
-    # Brasile
-    'flamengo': 'flamengo', 'palmeiras': 'palmeiras', 'corinthians': 'corinthians',
-    'sao paulo': 'saopaulo', 'santos': 'santos', 'gremio': 'gremio',
-    'internacional': 'internacional', 'atletico mineiro': 'atleticomineiro',
-    'atletico mg': 'atleticomineiro', 'cruzeiro': 'cruzeiro',
-    'fluminense': 'fluminense', 'botafogo': 'botafogo', 'vasco da gama': 'vascodagama',
-    'vasco': 'vascodagama', 'bahia': 'bahia', 'fortaleza': 'fortaleza',
-    'ceara': 'ceara', 'sport recife': 'sportrecife', 'recife': 'sportrecife',
-    'athletico paranaense': 'athleticoparanaense', 'paranaense': 'athleticoparanaense',
-    'bragantino': 'bragantino', 'rb bragantino': 'bragantino',
-    'goias': 'goias', 'coritiba': 'coritiba', 'america mineiro': 'americamineiro',
-    'america mg': 'americamineiro', 'cuiaba': 'cuiaba', 'juventude': 'juventude',
-
-    # Argentina
-    'boca juniors': 'bocajuniors', 'boca': 'bocajuniors',
-    'river plate': 'riverplate', 'river': 'riverplate',
-    'racing club': 'racingclub', 'racing': 'racingclub',
-    'independiente': 'independiente', 'san lorenzo': 'sanlorenzo',
-    'velez sarsfield': 'velezsarsfield', 'velez': 'velezsarsfield',
-    'estudiantes': 'estudiantes', 'estudiantes la plata': 'estudiantes',
-    'la plata': 'estudiantes', 'gimnasia la plata': 'gimnasialaplata',
-    'gimnasia': 'gimnasialaplata', 'huracan': 'huracan', 'lanus': 'lanus',
-    'banfield': 'banfield', 'talleres': 'talleres', 'talleres cordoba': 'talleres',
-    'cordoba': 'talleres', 'newells old boys': 'newellsoldboys',
-    'newells': 'newellsoldboys', 'rosario central': 'rosariocentral',
-    'rosario': 'rosariocentral', 'argentinos juniors': 'argentinosjuniors',
-    'defensa y justicia': 'defensayjusticia', 'defensa': 'defensayjusticia',
-    'godoy cruz': 'godoycruz', 'colon': 'colon', 'colon santa fe': 'colon',
-    'santa fe': 'colon', 'union santa fe': 'unionsantafe', 'union': 'unionsantafe',
-    'central cordoba': 'centralcordoba', 'patronato': 'patronato',
-    'atletico tucuman': 'atleticotucuman', 'tucuman': 'atleticotucuman',
-    'platense': 'platense', 'arsenal sarandi': 'arsenalsarandi',
-    'arsenal': 'arsenalsarandi', 'sarandi': 'arsenalsarandi',
-    'aldosivi': 'aldosivi', 'barracas central': 'barracascentral',
-    'barracas': 'barracascentral', 'tigre': 'tigre', 'sarmiento': 'sarmiento',
-    'instituto': 'instituto', 'belgrano': 'belgrano',
-
-    # Messico
-    'america': 'america', 'club america': 'america',
-    'guadalajara': 'guadalajara', 'chivas': 'guadalajara',
-    'cruz azul': 'cruzazul', 'pumas': 'pumas', 'pumas unam': 'pumas',
-    'unam': 'pumas', 'tigres': 'tigres', 'tigres uanl': 'tigres',
-    'uanl': 'tigres', 'monterrey': 'monterrey', 'rayados': 'monterrey',
-    'toluca': 'toluca', 'deportivo toluca': 'toluca',
-    'santos laguna': 'santoslaguna', 'laguna': 'santoslaguna',
-    'leon': 'leon', 'club leon': 'leon', 'pachuca': 'pachuca',
-    'puebla': 'puebla', 'atlas': 'atlas', 'atlas guadalajara': 'atlas',
-    'queretaro': 'queretaro', 'necaxa': 'necaxa', 'mazatlan': 'mazatlan',
-    'juarez': 'juarez', 'fc juarez': 'juarez', 'tijuana': 'tijuana',
-    'xolos': 'tijuana', 'xolos tijuana': 'tijuana', 'atletico san luis': 'atleticosanluis',
-    'san luis': 'atleticosanluis',
-
-    # ============ USA ============
-    'inter miami': 'intermiami', 'miami': 'intermiami',
-    'la galaxy': 'lagalaxy', 'galaxy': 'lagalaxy',
-    'lafc': 'lafc', 'los angeles fc': 'lafc', 'los angeles': 'lafc',
-    'seattle sounders': 'seattlesounders', 'sounders': 'seattlesounders',
-    'atlanta united': 'atlantaunited', 'atlanta': 'atlantaunited',
-    'portland timbers': 'portlandtimbers', 'portland': 'portlandtimbers',
-    'austin fc': 'austinfc', 'austin': 'austinfc',
-    'fc dallas': 'fcdallas', 'dallas': 'fcdallas',
-    'houston dynamo': 'houstondynamo', 'houston': 'houstondynamo',
-    'sporting kansas city': 'sportingkansascity', 'kansas city': 'sportingkansascity',
-    'colorado rapids': 'coloradorapids', 'colorado': 'coloradorapids',
-    'real salt lake': 'realsaltlake', 'salt lake': 'realsaltlake',
-    'minnesota united': 'minnesotaunited', 'minnesota': 'minnesotaunited',
-    'chicago fire': 'chicagofire', 'chicago': 'chicagofire',
-    'columbus crew': 'columbuscrew', 'columbus': 'columbuscrew',
-    'new england revolution': 'newenglandrevolution', 'new england': 'newenglandrevolution',
-    'philadelphia union': 'philadelphiaunion', 'philadelphia': 'philadelphiaunion',
-    'new york city fc': 'newyorkcityfc', 'nycfc': 'newyorkcityfc',
-    'new york red bulls': 'newyorkredbulls', 'red bulls': 'newyorkredbulls',
-    'dc united': 'dcunited', 'washington': 'dcunited',
-    'orlando city': 'orlandocity', 'orlando': 'orlandocity',
-    'nashville sc': 'nashvillesc', 'nashville': 'nashvillesc',
-    'fc cincinnati': 'fccincinnati', 'cincinnati': 'fccincinnati',
-    'toronto fc': 'torontofc', 'toronto': 'torontofc',
-    'cf montreal': 'cfmontreal', 'montreal': 'cfmontreal',
-    'vancouver whitecaps': 'vancouverwhitecaps', 'vancouver': 'vancouverwhitecaps',
-    'st louis city': 'stlouiscity', 'st louis': 'stlouiscity',
-    'charlotte fc': 'charlottefc', 'charlotte': 'charlottefc',
 }
 
 # ============================================================
@@ -564,7 +292,7 @@ def similarita(a: str, b: str) -> float:
     return (2 * intersection) / (len(bigrams_a) + len(bigrams_b))
 
 # ============================================================
-# PARSING PDF (multi-riga)
+# PARSING PDF (one-line: formato reale Marathonbet)
 # ============================================================
 
 GIORNI = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
@@ -573,24 +301,12 @@ MESI = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
 MESI_NUM = {'gennaio': 1, 'febbraio': 2, 'marzo': 3, 'aprile': 4, 'maggio': 5, 'giugno': 6,
             'luglio': 7, 'agosto': 8, 'settembre': 9, 'ottobre': 10, 'novembre': 11, 'dicembre': 12}
 
-RIGHE_IGNORE = {
-    'Calcio', '1X2', 'DOPPIA CHANCE', 'GG/NG',
-    'U/O 1,5', 'U/O 2,5', 'U/O 3,5', 'U/O 4,5',
-    'MG 1-4', 'MG 2-5', 'Codice alias',
-    '1', 'x', '2', '1x', '12', 'x2', 'g', 'n',
-    'u1', 'o1', 'u', 'o', 'u3', 'o3', 'u4', 'o4', '1-4', '2-5',
-    'Alias', 'Ora', 'Evento', '1X', '12', 'X2', 'GOAL', 'NOGOAL',
-    'UNDER', 'OVER', 'SI', 'NO', 'X',
-}
-
 
 def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
     """
-    Estrae righe dal PDF.
-    Usa pypdf (leggero, veloce, no dipendenze di sistema) come primario.
-    pdfplumber come fallback.
+    Estrae righe dal PDF. Usa pypdf (leggero) come primario, pdfplumber come fallback.
     """
-    # Tentativo 1: pypdf (leggero)
+    # Tentativo 1: pypdf
     try:
         from pypdf import PdfReader
         logger.info("📄 [PDF] Uso pypdf (leggero)...")
@@ -615,7 +331,7 @@ def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
     except Exception as e:
         logger.warning(f"⚠️ [PDF] pypdf fallito: {e}")
 
-    # Tentativo 2: pdfplumber (fallback, pesante)
+    # Tentativo 2: pdfplumber
     try:
         import pdfplumber
         logger.info("📄 [PDF] Uso pdfplumber (fallback)...")
@@ -639,24 +355,13 @@ def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
         return []
     except Exception as e:
         logger.error(f"❌ [PDF] pdfplumber fallito: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
         return []
 
 
-def is_intestazione_campionato(testo: str) -> Optional[str]:
-    pattern = r'^([A-Z][a-zà-ù]+(?:\s+di\s+[A-Z][a-zà-ù]+)?)\s+-\s+(.+)$'
-    match = re.match(pattern, testo)
-    if not match:
-        return None
-    if any(g in testo for g in GIORNI):
-        return None
-    return testo.strip()
-
-
 def is_riga_data(testo: str) -> Optional[str]:
-    pattern = r'^(' + '|'.join(GIORNI) + r')\s+(\d{1,2})\s+(' + '|'.join(MESI) + r')'
-    match = re.match(pattern, testo, re.IGNORECASE)
+    """Riconosce una riga data tipo 'Giovedì 17 Settembre' e restituisce ISO"""
+    pattern = r'^(' + '|'.join(GIORNI) + r')\s+(\d{1,2})\s+(' + '|'.join(MESI) + r')\s*$'
+    match = re.match(pattern, testo.strip(), re.IGNORECASE)
     if not match:
         return None
     giorno = match.group(2).zfill(2)
@@ -672,116 +377,94 @@ def is_riga_data(testo: str) -> Optional[str]:
     return f"{anno}-{mese_str}-{giorno}"
 
 
-def is_quota(testo: str) -> Optional[float]:
-    if re.match(r'^\d+\.\d{1,2}$', testo):
-        try:
-            return float(testo)
-        except:
-            return None
-    return None
+# Regex per una riga partita completa:
+# ALIAS ORA CASA - OSPITI Q1 Q2 Q3 Q4 Q5 Q6 Q7 Q8 Q9 Q10 Q11 Q12 Q13 Q14 Q15 Q16
+_RE_PARTITA = re.compile(
+    r'^(\d{1,6})\s+'                                  # 1: alias
+    r'(\d{1,2}:\d{2})\s+'                             # 2: ora
+    r'(.+?)\s+-\s+(.+?)\s+'                           # 3: casa, 4: ospiti
+    r'(\d+\.\d{2})\s+'                                # 5: 1
+    r'(\d+\.\d{2})\s+'                                # 6: X
+    r'(\d+\.\d{2})\s+'                                # 7: 2
+    r'(\d+\.\d{2})\s+'                                # 8: 1X
+    r'(\d+\.\d{2})\s+'                                # 9: 12
+    r'(\d+\.\d{2})\s+'                                # 10: X2
+    r'(\d+\.\d{2})\s+'                                # 11: GOAL
+    r'(\d+\.\d{2})\s+'                                # 12: NOGOAL
+    r'(\d+\.\d{2})\s+'                                # 13: UNDER 1.5
+    r'(\d+\.\d{2})\s+'                                # 14: OVER 1.5
+    r'(\d+\.\d{2})\s+'                                # 15: UNDER 2.5
+    r'(\d+\.\d{2})\s+'                                # 16: OVER 2.5
+    r'(\d+\.\d{2})\s+'                                # 17: UNDER 3.5
+    r'(\d+\.\d{2})\s+'                                # 18: OVER 3.5
+    r'(\d+\.\d{2})\s+'                                # 19: UNDER 4.5
+    r'(\d+\.\d{2})\s*$'                               # 20: OVER 4.5
+)
 
 
 def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
+    """
+    Parser per formato Marathonbet one-line:
+    ALIAS ORA CASA - OSPITI Q1 QX Q2 Q1X Q12 QX2 QGOAL QNOGOAL
+    QU1.5 QO1.5 QU2.5 QO2.5 QU3.5 QO3.5 QU4.5 QO4.5
+    
+    Esempio:
+    2600 20:30 Manchester City - Norwich 1.10 9.80 19.00 1.02 1.05 5.75 1.95 1.76 7.40 1.06 3.75 1.23 2.18 1.61 1.54 2.33
+    """
     partite = []
-    campionato_corrente = None
-    data_corrente = None
     data_iso_corrente = None
+    data_corrente = None
 
-    i = 0
-    n = len(righe)
-
-    while i < n:
-        riga = righe[i]
-
-        camp = is_intestazione_campionato(riga)
-        if camp:
-            campionato_corrente = camp
-            i += 1
-            continue
-
+    for riga in righe:
+        # Riga data?
         data_iso = is_riga_data(riga)
         if data_iso:
-            data_corrente = riga
             data_iso_corrente = data_iso
-            i += 1
+            data_corrente = riga
             continue
 
-        if riga in RIGHE_IGNORE:
-            i += 1
+        # Riga partita?
+        m = _RE_PARTITA.match(riga)
+        if not m:
             continue
 
-        if re.match(r'^\d{3,6}$', riga):
-            alias = riga
-            if i + 2 >= n:
-                i += 1
-                continue
+        try:
+            alias = m.group(1)
+            ora = m.group(2)
+            casa = m.group(3).strip()
+            ospiti = m.group(4).strip()
+            # 16 quote
+            q_vals = [float(m.group(i)) for i in range(5, 21)]
+        except (ValueError, IndexError) as e:
+            logger.warning(f"⚠️ [PDF] Errore parsing riga: {e} | {riga[:120]}")
+            continue
 
-            ora_candidate = righe[i + 1]
-            evento_candidate = righe[i + 2]
+        quote_mappate = {
+            '1': q_vals[0], 'X': q_vals[1], '2': q_vals[2],
+            '1X': q_vals[3], '12': q_vals[4], 'X2': q_vals[5],
+            'GG': q_vals[6], 'NG': q_vals[7],
+            'U1.5': q_vals[8], 'O1.5': q_vals[9],
+            'U2.5': q_vals[10], 'O2.5': q_vals[11],
+            'U3.5': q_vals[12], 'O3.5': q_vals[13],
+            'U4.5': q_vals[14], 'O4.5': q_vals[15],
+            'MG14_SI': None, 'MG14_NO': None,
+            'MG25_SI': None, 'MG25_NO': None,
+        }
 
-            if not re.match(r'^\d{1,2}:\d{2}$', ora_candidate):
-                i += 1
-                continue
-
-            if ' - ' not in evento_candidate:
-                i += 1
-                continue
-
-            sep_idx = evento_candidate.rfind(' - ')
-            casa = evento_candidate[:sep_idx].strip()
-            ospiti = evento_candidate[sep_idx + 3:].strip()
-
-            if not casa or not ospiti:
-                i += 1
-                continue
-
-            quote_list = []
-            j = i + 3
-            while j < n and len(quote_list) < 20:
-                q = is_quota(righe[j])
-                if q is not None:
-                    quote_list.append(q)
-                    j += 1
-                elif righe[j] == '-':
-                    quote_list.append(None)
-                    j += 1
-                else:
-                    break
-
-            if len(quote_list) >= 3:
-                def q(idx):
-                    return quote_list[idx] if len(quote_list) > idx else None
-
-                quote_mappate = {
-                    '1': q(0), 'X': q(1), '2': q(2),
-                    '1X': q(3), '12': q(4), 'X2': q(5),
-                    'GG': q(6), 'NG': q(7),
-                    'U1.5': q(8), 'O1.5': q(9),
-                    'U2.5': q(10), 'O2.5': q(11),
-                    'U3.5': q(12), 'O3.5': q(13),
-                    'U4.5': q(14), 'O4.5': q(15),
-                    'MG14_SI': q(16), 'MG14_NO': q(17),
-                    'MG25_SI': q(18), 'MG25_NO': q(19),
-                }
-
-                partite.append({
-                    'alias': alias,
-                    'ora': ora_candidate,
-                    'casa': casa,
-                    'ospiti': ospiti,
-                    'quote': quote_mappate,
-                    'campionato': campionato_corrente,
-                    'data': data_corrente,
-                    'dataISO': data_iso_corrente,
-                    'fonte': 'Marathonbet',
-                })
-
-                i = j
-                continue
-
-        i += 1
+        partite.append({
+            'alias': alias,
+            'ora': ora,
+            'casa': casa,
+            'ospiti': ospiti,
+            'quote': quote_mappate,
+            'campionato': None,
+            'data': data_corrente,
+            'dataISO': data_iso_corrente,
+            'fonte': 'Marathonbet',
+        })
 
     return partite
+
 
 # ============================================================
 # CARICAMENTO QUOTE DA GITHUB (multi-PDF con merge)
@@ -801,9 +484,7 @@ def _download_and_parse_pdf(url: str) -> List[Dict]:
             return []
 
         if not response.content.startswith(b'%PDF'):
-            content_type = response.headers.get('content-type', '')
-            logger.error(f"❌ [PDF] Non è un PDF (content-type={content_type})")
-            logger.error(f"   Prime 200 chars: {response.text[:200]}")
+            logger.error(f"❌ [PDF] Non è un PDF")
             return []
 
         logger.info(f"📂 [PDF] Estrazione righe...")
@@ -820,10 +501,9 @@ def _download_and_parse_pdf(url: str) -> List[Dict]:
         partite = parse_marathonbet_pdf(righe)
         logger.info(f"📂 [PDF] Parsate {len(partite)} partite in {time.time()-t0:.1f}s")
 
-        # LOG DIAGNOSTICO: prime righe se 0 partite
-        if len(partite) == 0 and len(righe) > 0:
-            logger.warning(f"⚠️ [PDF] 0 partite parsate! Prime 40 righe estratte:")
-            for i, r in enumerate(righe[:40]):
+        if len(partite) == 0:
+            logger.warning(f"⚠️ [PDF] 0 partite parsate! Prime 20 righe:")
+            for i, r in enumerate(righe[:20]):
                 logger.warning(f"   {i:3d}: {repr(r)}")
 
         return partite
@@ -838,7 +518,6 @@ def _download_and_parse_pdf(url: str) -> List[Dict]:
 
 
 def _chiave_partita(p: Dict) -> Tuple[str, str, str, str]:
-    """Chiave univoca per una partita (per deduplicazione)"""
     return (
         normalizza_nome(p.get('casa', '')),
         normalizza_nome(p.get('ospiti', '')),
@@ -848,10 +527,7 @@ def _chiave_partita(p: Dict) -> Tuple[str, str, str, str]:
 
 
 def load_quote_from_github() -> List[Dict]:
-    """
-    Scarica e parsa TUTTI i PDF di quote configurati in QUOTE_PDF_URLS.
-    Unisce i risultati: se una partita appare in più PDF, unisce le quote.
-    """
+    """Scarica e parsa tutti i PDF, unendo i risultati"""
     tutte_partite: List[Dict] = []
     indice: Dict[Tuple[str, str, str, str], Dict] = {}
 
@@ -867,13 +543,11 @@ def load_quote_from_github() -> List[Dict]:
                 for k, v in p['quote'].items():
                     if esistente['quote'].get(k) is None and v is not None:
                         esistente['quote'][k] = v
-                if not esistente.get('campionato') and p.get('campionato'):
-                    esistente['campionato'] = p['campionato']
             else:
                 indice[chiave] = p
                 tutte_partite.append(p)
 
-    logger.info(f"✅ [QUOTE] Totale partite (unite da {len(QUOTE_PDF_URLS)} PDF): {len(tutte_partite)}")
+    logger.info(f"✅ [QUOTE] Totale partite (unite): {len(tutte_partite)}")
     return tutte_partite
 
 # ============================================================
@@ -919,7 +593,6 @@ def trova_quota_per_giocata(match, family_id: str, giocata: str,
     key = (family_id, giocata)
     if key in _MAPPING_QUOTE:
         return quote.get(_MAPPING_QUOTE[key])
-    # DC+Over
     if family_id == 'dc_over' and '+' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2:
@@ -927,7 +600,6 @@ def trova_quota_per_giocata(match, family_id: str, giocata: str,
             over_q = quote.get(parts[1])
             if dc_q and over_q:
                 return round(dc_q * over_q, 2)
-    # DC+Under
     if family_id == 'dc_under' and '+' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2:
