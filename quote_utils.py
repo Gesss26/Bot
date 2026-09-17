@@ -1,14 +1,14 @@
 # ============================================================
 # quote_utils.py
 # Modulo condiviso per parsing quote Marathonbet (PDF)
-# Versione 2: parser multi-riga per pdfplumber
+# Versione 3: multi-PDF + merge quote + traduzioni complete
 # ============================================================
 
 import re
 import time
 import logging
 import unicodedata
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from io import BytesIO
 from datetime import datetime
 import requests
@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 # CONFIGURAZIONE
 # ============================================================
 
-QUOTE_PDF_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/quote/marathonbet.pdf"
+QUOTE_PDF_URLS = [
+    "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/quote/marathonbet.pdf",
+    "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/quote/marathonbet-2.pdf",
+]
 SOGLIA_MATCH_QUOTE = 0.62
 
 # ============================================================
@@ -27,7 +30,7 @@ SOGLIA_MATCH_QUOTE = 0.62
 # ============================================================
 
 TRADUZIONI_SQUADRE = {
-    # Spagna
+    # ============ SPAGNA ============
     'siviglia': 'sevilla', 'barcellona': 'barcelona', 'real madrid': 'realmadrid',
     'atletico madrid': 'atleticomadrid', 'athletic bilbao': 'athleticbilbao',
     'real betis': 'realbetis', 'real sociedad': 'realsociedad',
@@ -36,7 +39,18 @@ TRADUZIONI_SQUADRE = {
     'espanyol': 'espanyol', 'rayo vallecano': 'rayovallecano',
     'alaves': 'alaves', 'malaga': 'malaga', 'cf malaga': 'malaga',
     'racing santander': 'racingsantander', 'deportivo la coruna': 'deportivolacoruna',
-    # Italia
+    'girona': 'girona', 'las palmas': 'laspalmas', 'almeria': 'almeria',
+    'cadice': 'cadiz', 'cadiz': 'cadiz', 'maiorca': 'mallorca', 'mallorca': 'mallorca',
+    'celta vigo': 'celtavigo', 'real valladolid': 'realvalladolid',
+    'granada': 'granada', 'alaves': 'alaves', 'eibar': 'eibar',
+    'huesca': 'huesca', 'lugo': 'lugo', 'mirandes': 'mirandes',
+    'oviedo': 'oviedo', 'ponferradina': 'ponferradina', 'sporting gijon': 'sportinggijon',
+    'tenerife': 'tenerife', 'zaragoza': 'zaragoza', 'real oviedo': 'realoviedo',
+    'cartagena': 'cartagena', 'albacete': 'albacete', 'andorra': 'andorra',
+    'burgos': 'burgos', 'ibiza': 'ibiza', 'leganes': 'leganes',
+    'pontevedra': 'pontevedra', 'sabadell': 'sabadell', 'castellon': 'castellon',
+
+    # ============ ITALIA ============
     'inter': 'inter', 'inter milano': 'intermilano', 'milan': 'milan',
     'ac milan': 'milan', 'juventus': 'juventus', 'napoli': 'napoli',
     'roma': 'roma', 'lazio': 'lazio', 'atalanta': 'atalanta',
@@ -54,7 +68,180 @@ TRADUZIONI_SQUADRE = {
     'catania fc': 'catania', 'crotone': 'crotone',
     'inter u23': 'interu23', 'juventus u23': 'juventusu23',
     'atalanta u23': 'atalantau23', 'milan u23': 'milanu23',
-    # ... (resto identico)
+    # Serie B
+    'ascoli': 'ascoli', 'benevento': 'benevento', 'brescia': 'brescia',
+    'cittadella': 'cittadella', 'cosenza': 'cosenza', 'feralpisalo': 'feralpisalo',
+    'feralpi salo': 'feralpisalo', 'juve stabia': 'juvestabia',
+    'modena': 'modena', 'napoli primavera': 'napoliprimavera',
+    'palermo': 'palermo', 'perugia': 'perugia', 'pisa': 'pisa',
+    'pordenone': 'pordenone', 'reggina': 'reggina', 'renate': 'renate',
+    'sudtirol': 'sudtirol', 'ternana': 'ternana', 'trento': 'trento',
+    'vicenza': 'vicenza', 'virtus entella': 'virtusentella',
+    'alessandria': 'alessandria', 'avellino': 'avellino', 'catanzaro': 'catanzaro',
+    'foggia': 'foggia', 'latina': 'latina', 'monopoli': 'monopoli',
+    'picerno': 'picerno', 'potenza': 'potenza', 'taranto': 'taranto',
+    'turris': 'turris', 'viterbese': 'viterbese', 'messina': 'messina',
+    'giugliano': 'giugliano', 'monterosi': 'monterosi', 'recina': 'recina',
+
+    # ============ INGHILTERRA ============
+    'manchester united': 'manchesterunited', 'manchester city': 'manchestercity',
+    'liverpool': 'liverpool', 'chelsea': 'chelsea', 'arsenal': 'arsenal',
+    'tottenham': 'tottenham', 'tottenham hotspur': 'tottenham',
+    'newcastle': 'newcastle', 'newcastle united': 'newcastle',
+    'aston villa': 'astonvilla', 'everton': 'everton', 'west ham': 'westham',
+    'west ham united': 'westham', 'leicester': 'leicester', 'leicester city': 'leicester',
+    'leeds': 'leeds', 'leeds united': 'leeds', 'wolves': 'wolves',
+    'wolverhampton': 'wolves', 'brighton': 'brighton', 'crystal palace': 'crystalpalace',
+    'fulham': 'fulham', 'brentford': 'brentford', 'nottingham forest': 'nottinghamforest',
+    'bournemouth': 'bournemouth', 'southampton': 'southampton', 'ipswich': 'ipswich',
+    'sheffield united': 'sheffieldunited', 'sheffield wednesday': 'sheffieldwednesday',
+    'burnley': 'burnley', 'watford': 'watford', 'norwich': 'norwich',
+    'norwich city': 'norwich', 'west bromwich': 'westbromwich', 'west brom': 'westbromwich',
+    'middlesbrough': 'middlesbrough', 'stoke': 'stoke', 'stoke city': 'stoke',
+    'swansea': 'swansea', 'cardiff': 'cardiff', 'cardiff city': 'cardiff',
+    'hull': 'hull', 'hull city': 'hull', 'coventry': 'coventry', 'coventry city': 'coventry',
+    'bristol city': 'bristolcity', 'preston': 'preston', 'millwall': 'millwall',
+    'blackburn': 'blackburn', 'reading': 'reading', 'sunderland': 'sunderland',
+    'portsmouth': 'portsmouth', 'derby': 'derby', 'derby county': 'derby',
+    'qpr': 'qpr', 'queens park rangers': 'qpr', 'luton': 'luton',
+    'rotherham': 'rotherham', 'wycombe': 'wycombe', 'milton keynes': 'miltonkeynes',
+    'cambridge': 'cambridge', 'oxford': 'oxford', 'oxford united': 'oxford',
+    'charlton': 'charlton', 'bolton': 'bolton', 'wigan': 'wigan',
+    'barnsley': 'barnsley', 'shrewsbury': 'shrewsbury', 'fleetwood': 'fleetwood',
+    'accrington': 'accrington', 'burton': 'burton', 'doncaster': 'doncaster',
+    'gillingham': 'gillingham', 'ipswich town': 'ipswich', 'lincoln': 'lincoln',
+    'mk dons': 'mkdons', 'morecambe': 'morecambe', 'plymouth': 'plymouth',
+    'salford': 'salford', 'scunthorpe': 'scunthorpe', 'stevenage': 'stevenage',
+    'sutton': 'sutton', 'tranmere': 'tranmere', 'walsall': 'walsall',
+    'yeovil': 'yeovil', 'crewe': 'crewe', 'grismby': 'grimsby', 'grimsby': 'grimsby',
+    'newport': 'newport', 'northampton': 'northampton', 'oldham': 'oldham',
+    'port vale': 'portvale', 'rochdale': 'rochdale', 'swindon': 'swindon',
+
+    # ============ GERMANIA ============
+    'bayern monaco': 'bayernmonaco', 'bayern munich': 'bayernmonaco',
+    'borussia dortmund': 'borussiadortmund', 'dortmund': 'borussiadortmund',
+    'rb lipsia': 'rblipsia', 'leipzig': 'rblipsia',
+    'bayer leverkusen': 'bayerleverkusen', 'leverkusen': 'bayerleverkusen',
+    'eintracht francoforte': 'eintrachtfrancoforte', 'francoforte': 'eintrachtfrancoforte',
+    'borussia monchengladbach': 'borussiamonchengladbach', 'gladbach': 'borussiamonchengladbach',
+    'wolfsburg': 'wolfsburg', 'union berlino': 'unionberlino', 'union berlin': 'unionberlino',
+    'friburgo': 'friburgo', 'freiburg': 'friburgo',
+    'stoccarda': 'stoccarda', 'stuttgart': 'stoccarda',
+    'mainz': 'mainz', 'augsburg': 'augsburg', 'werder brema': 'werderbrema',
+    'werder bremen': 'werderbrema', 'hoffenheim': 'hoffenheim', 'bochum': 'bochum',
+    'colonia': 'colonia', 'koln': 'colonia', 'cologne': 'colonia',
+    'hertha berlino': 'herthaberlino', 'hertha berlin': 'herthaberlino',
+    'schalke 04': 'schalke04', 'schalke': 'schalke04',
+    'amburgo': 'amburgo', 'hamburger sv': 'amburgo', 'hamburg': 'amburgo',
+    'hannover': 'hannover', 'karlsruhe': 'karlsruhe', 'karlsruher': 'karlsruhe',
+    'dusseldorf': 'dusseldorf', 'fortuna dusseldorf': 'fortunadusseldorf',
+    'nurnberg': 'nurnberg', 'norimberga': 'nurnberg',
+    'paderborn': 'paderborn', 'sandhausen': 'sandhausen', 'darmstadt': 'darmstadt',
+    'heidenheim': 'heidenheim', 'regensburg': 'regensburg', 'magdeburg': 'magdeburg',
+    'rostock': 'rostock', 'hansa rostock': 'hansarostock', 'braunschweig': 'braunschweig',
+    'kiel': 'kiel', 'holstein kiel': 'holsteinkiel', 'bielefeld': 'bielefeld',
+    'arminia bielefeld': 'arminiabielefeld', 'ingolstadt': 'ingolstadt',
+    'wurzburg': 'wurzburg', 'wuerzburg': 'wurzburg',
+
+    # ============ FRANCIA ============
+    'psg': 'psg', 'paris saint germain': 'psg', 'paris sg': 'psg',
+    'marsiglia': 'marsiglia', 'marseille': 'marsiglia',
+    'lione': 'lione', 'lyon': 'lione', 'olympique lyon': 'lione',
+    'monaco': 'monaco', 'as monaco': 'monaco',
+    'lille': 'lille', 'losc lille': 'lille',
+    'rennes': 'rennes', 'stade rennais': 'rennes',
+    'nizza': 'nizza', 'nice': 'nizza', 'ogc nice': 'nizza',
+    'lens': 'lens', 'rc lens': 'lens',
+    'reims': 'reims', 'stade reims': 'reims',
+    'montpellier': 'montpellier', 'strasburgo': 'strasburgo', 'strasbourg': 'strasburgo',
+    'nantes': 'nantes', 'toulouse': 'toulouse', 'bordeaux': 'bordeaux',
+    'saint etienne': 'saintetienne', 'asse': 'saintetienne',
+    'angers': 'angers', 'brest': 'brest', 'lorient': 'lorient',
+    'troyes': 'troyes', 'auxerre': 'auxerre', 'ajaccio': 'ajaccio',
+    'clermont': 'clermont', 'clermont foot': 'clermont',
+    'metz': 'metz', 'dijon': 'dijon', 'caen': 'caen',
+    'le havre': 'lehavre', 'amiens': 'amiens', 'grenoble': 'grenoble',
+    'guingamp': 'guingamp', 'nancy': 'nancy', 'niort': 'niort',
+    'paris fc': 'parisfc', 'pau': 'pau', 'quevilly': 'quevilly',
+    'rodez': 'rodez', 'sochaux': 'sochaux', 'valenciennes': 'valenciennes',
+
+    # ============ PORTOGALLO ============
+    'benfica': 'benfica', 'porto': 'porto', 'fc porto': 'porto',
+    'sporting lisbona': 'sportinglisbona', 'sporting lisbon': 'sportinglisbona',
+    'sporting cp': 'sportinglisbona', 'braga': 'braga', 'sc braga': 'braga',
+    'vitoria guimaraes': 'vitoriaguimaraes', 'guimaraes': 'vitoriaguimaraes',
+    'boavista': 'boavista', 'famalicao': 'famalicao', 'gil vicente': 'gilvicente',
+    'estoril': 'estoril', 'portimonense': 'portimonense', 'maritimo': 'maritimo',
+    'rio ave': 'rioave', 'santa clara': 'santaclara', 'vizela': 'vizela',
+    'arouca': 'arouca', 'casa pia': 'casapia', 'chaves': 'chaves',
+    'moreirense': 'moreirense', 'paços ferreira': 'pacosferreira',
+    'pacos ferreira': 'pacosferreira', 'academico viseu': 'academicoviseu',
+    'leixoes': 'leixoes', 'nacional': 'nacional', 'penafiel': 'penafiel',
+    'tondela': 'tondela', 'vilafranquense': 'vilafranquense',
+
+    # ============ OLANDA ============
+    'ajax': 'ajax', 'psv': 'psv', 'psv eindhoven': 'psv', 'feyenoord': 'feyenoord',
+    'az alkmaar': 'azalkmaar', 'az': 'azalkmaar', 'twente': 'twente',
+    'utrecht': 'utrecht', 'vitesse': 'vitesse', 'heerenveen': 'heerenveen',
+    'groningen': 'groningen', 'sparta rotterdam': 'spartarotterdam',
+    'nijmegen': 'nijmegen', 'nec': 'nec', 'go ahead eagles': 'goaheadeagles',
+    'rkc waalwijk': 'rkcwaalwijk', 'waalwijk': 'rkcwaalwijk',
+    'fortuna sittard': 'fortunasittard', 'sittard': 'fortunasittard',
+    'cambuur': 'cambuur', 'excelsior': 'excelsior', 'volendam': 'volendam',
+    'emmen': 'emmen', 'almere city': 'almerecity', 'almere': 'almerecity',
+    'hercules': 'hercules', 'den bosch': 'denbosch', 'eindhoven': 'eindhoven',
+    'de graafschap': 'degraafschap', 'graafschap': 'degraafschap',
+    'roda jc': 'rodajc', 'roda': 'rodajc', 'vvv venlo': 'vvvvenlo',
+    'venlo': 'vvvvenlo', 'dordrecht': 'dordrecht', 'helmond sport': 'helmondsport',
+    'jong ajax': 'jongajax', 'jong psv': 'jongpsv', 'jong az': 'jongaz',
+    'jong utrecht': 'jongutrecht', 'jong twente': 'jongtwente',
+
+    # ============ BELGIO ============
+    'anderlecht': 'anderlecht', 'club bruges': 'clubbruges', 'bruges': 'clubbruges',
+    'standard liegi': 'standardliegi', 'standard liege': 'standardliegi',
+    'genk': 'genk', 'krc genk': 'genk', 'gent': 'gent', 'kaa gent': 'gent',
+    'royal antwerp': 'royalantwerp', 'antwerp': 'royalantwerp',
+    'charleroi': 'charleroi', 'sporting charleroi': 'charleroi',
+    'cercle bruges': 'cerclebruges', 'kv mechelen': 'kvmechelen', 'mechelen': 'kvmechelen',
+    'kv kortrijk': 'kvkortrijk', 'kortrijk': 'kvkortrijk',
+    'oh leuven': 'ohleuven', 'leuven': 'ohleuven', 'oud heverlee': 'ohleuven',
+    'sint truiden': 'sinttruiden', 'stvv': 'sinttruiden',
+    'westerlo': 'westerlo', 'kvc westerlo': 'westerlo',
+    'zulte waregem': 'zultewaregem', 'waregem': 'zultewaregem',
+    'eupen': 'eupen', 'kasp eupen': 'eupen', 'beerschot': 'beerschot',
+    'union saint gilloise': 'unionsaintgilloise', 'union sg': 'unionsaintgilloise',
+    'rwdm': 'rwdm', 'molenbeek': 'rwdm',
+
+    # ============ SCOZIA ============
+    'celtic': 'celtic', 'rangers': 'rangers', 'aberdeen': 'aberdeen',
+    'hearts': 'hearts', 'heart of midlothian': 'hearts',
+    'hibernian': 'hibernian', 'hibernians': 'hibernian',
+    'dundee': 'dundee', 'dundee united': 'dundeeunited',
+    'motherwell': 'motherwell', 'kilmarnock': 'kilmarnock',
+    'st mirren': 'stmirren', 'ross county': 'rosscounty',
+    'livingston': 'livingston', 'st johnstone': 'stjohnstone',
+    'dunfermline': 'dunfermline', 'falkirk': 'falkirk',
+    'inverness': 'inverness', 'partick thistle': 'partickthistle',
+    'queen of south': 'queenofsouth', 'raith rovers': 'raithrovers',
+    'ayr united': 'ayrunited', 'greenock morton': 'greenockmorton',
+    'arbroath': 'arbroath', 'alloa': 'alloa', 'cove rangers': 'coverangers',
+
+    # ============ TURCHIA ============
+    'galatasaray': 'galatasaray', 'fenerbahce': 'fenerbahce',
+    'besiktas': 'besiktas', 'trabzonspor': 'trabzonspor',
+    'basaksehir': 'basaksehir', 'istanbul basaksehir': 'basaksehir',
+    'adana demirspor': 'adanademirspor', 'adana': 'adanademirspor',
+    'konyaspor': 'konyaspor', 'konya': 'konyaspor',
+    'kayserispor': 'kayserispor', 'kayseri': 'kayserispor',
+    'alanyaspor': 'alanyaspor', 'alanya': 'alanyaspor',
+    'antalyaspor': 'antalyaspor', 'antalya': 'antalyaspor',
+    'sivasspor': 'sivasspor', 'sivas': 'sivasspor',
+    'gaziantep': 'gaziantep', 'gaziantep fk': 'gaziantep',
+    'kasimpasa': 'kasimpasa', 'rizespor': 'rizespor', 'rizes': 'rizespor',
+    'hatayspor': 'hatayspor', 'hatay': 'hatayspor',
+    'istanbulspor': 'istanbulspor', 'umraniye': 'umraniye',
+    'pendikspor': 'pendikspor', 'samsunspor': 'samsunspor',
+    'bodrum': 'bodrum', 'bodrumspor': 'bodrumspor',
 }
 
 # ============================================================
@@ -101,7 +288,6 @@ MESI = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
 MESI_NUM = {'gennaio': 1, 'febbraio': 2, 'marzo': 3, 'aprile': 4, 'maggio': 5, 'giugno': 6,
             'luglio': 7, 'agosto': 8, 'settembre': 9, 'ottobre': 10, 'novembre': 11, 'dicembre': 12}
 
-# Righe da ignorare (intestazioni tabella)
 RIGHE_IGNORE = {
     'Calcio', '1X2', 'DOPPIA CHANCE', 'GG/NG',
     'U/O 1,5', 'U/O 2,5', 'U/O 3,5', 'U/O 4,5',
@@ -130,12 +316,10 @@ def estrai_righe_da_pdf(contenuto_pdf: bytes) -> List[str]:
                         riga = riga.strip()
                         if riga:
                             righe.append(riga)
-                logger.info(f"📄 Pagina {i} estratta")
     except Exception as e:
         logger.error(f"❌ Errore estrazione PDF: {e}")
         return []
 
-    logger.info(f"✅ Estratte {len(righe)} righe totali")
     return righe
 
 
@@ -168,7 +352,6 @@ def is_riga_data(testo: str) -> Optional[str]:
 
 
 def is_quota(testo: str) -> Optional[float]:
-    """Riconosce una quota (numero decimale come 2.35 o 11.10)"""
     if re.match(r'^\d+\.\d{1,2}$', testo):
         try:
             return float(testo)
@@ -178,10 +361,6 @@ def is_quota(testo: str) -> Optional[float]:
 
 
 def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
-    """
-    Parser multi-riga: ogni partita è composta da più righe consecutive:
-    alias / ora / evento / quota1 / quotaX / quota2 / ...
-    """
     partite = []
     campionato_corrente = None
     data_corrente = None
@@ -193,14 +372,12 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
     while i < n:
         riga = righe[i]
 
-        # Intestazione campionato
         camp = is_intestazione_campionato(riga)
         if camp:
             campionato_corrente = camp
             i += 1
             continue
 
-        # Riga data
         data_iso = is_riga_data(riga)
         if data_iso:
             data_corrente = riga
@@ -208,16 +385,12 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
             i += 1
             continue
 
-        # Ignora righe di intestazione tabella
         if riga in RIGHE_IGNORE:
             i += 1
             continue
 
-        # Prova a riconoscere una partita:
-        # alias (numero 3-6 cifre) / ora (HH:MM) / evento (X - Y) / quote...
         if re.match(r'^\d{3,6}$', riga):
             alias = riga
-            # Controlla che le prossime righe siano ora + evento
             if i + 2 >= n:
                 i += 1
                 continue
@@ -233,7 +406,6 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
                 i += 1
                 continue
 
-            # Parsing evento
             sep_idx = evento_candidate.rfind(' - ')
             casa = evento_candidate[:sep_idx].strip()
             ospiti = evento_candidate[sep_idx + 3:].strip()
@@ -242,7 +414,6 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
                 i += 1
                 continue
 
-            # Raccogli quote successive (fino a 20, o fino a riga non-quota)
             quote_list = []
             j = i + 3
             while j < n and len(quote_list) < 20:
@@ -251,13 +422,11 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
                     quote_list.append(q)
                     j += 1
                 elif righe[j] == '-':
-                    # Quota mancante (es. Cittadella - Juventus Next Gen)
                     quote_list.append(None)
                     j += 1
                 else:
                     break
 
-            # Se abbiamo trovato almeno 3 quote, è una partita valida
             if len(quote_list) >= 3:
                 def q(idx):
                     return quote_list[idx] if len(quote_list) > idx else None
@@ -294,40 +463,92 @@ def parse_marathonbet_pdf(righe: List[str]) -> List[Dict]:
     return partite
 
 # ============================================================
-# CARICAMENTO QUOTE DA GITHUB
+# CARICAMENTO QUOTE DA GITHUB (multi-PDF con merge)
 # ============================================================
 
-def load_quote_from_github() -> List[Dict]:
+def _download_and_parse_pdf(url: str) -> List[Dict]:
+    """Scarica e parsa un singolo PDF di quote"""
     try:
-        logger.info(f"📂 [1/3] Download PDF da: {QUOTE_PDF_URL}")
+        logger.info(f"📂 Download PDF da: {url}")
         t0 = time.time()
-        response = requests.get(QUOTE_PDF_URL, timeout=60)
-        logger.info(f"📂 [1/3] Download OK in {time.time()-t0:.1f}s (status={response.status_code}, {len(response.content)} bytes)")
+        response = requests.get(url, timeout=60)
+        elapsed = time.time() - t0
+        logger.info(f"📂 Download OK in {elapsed:.1f}s (status={response.status_code}, {len(response.content)} bytes)")
 
         if response.status_code != 200:
-            logger.error(f"❌ HTTP {response.status_code}")
+            logger.error(f"❌ HTTP {response.status_code} per {url}")
             return []
 
-        logger.info("📂 [2/3] Estrazione righe dal PDF...")
+        # Verifica che sia un PDF
+        content_type = response.headers.get('content-type', '')
+        is_pdf_header = response.content.startswith(b'%PDF')
+        if 'pdf' not in content_type.lower() and not is_pdf_header:
+            logger.error(f"❌ Il file non è un PDF valido (content-type={content_type})")
+            logger.error(f"   Prime 200 chars: {response.text[:200]}")
+            return []
+
+        logger.info(f"📂 Estrazione righe dal PDF...")
         t0 = time.time()
         righe = estrai_righe_da_pdf(response.content)
-        logger.info(f"📂 [2/3] Estratte {len(righe)} righe in {time.time()-t0:.1f}s")
+        logger.info(f"📂 Estratte {len(righe)} righe in {time.time()-t0:.1f}s")
 
         if not righe:
-            logger.error("❌ Nessuna riga estratta")
+            logger.error(f"❌ Nessuna riga estratta da {url}")
             return []
 
-        logger.info("📂 [3/3] Parsing partite...")
+        logger.info(f"📂 Parsing partite...")
         t0 = time.time()
         partite = parse_marathonbet_pdf(righe)
-        logger.info(f"📂 [3/3] Parsate {len(partite)} partite in {time.time()-t0:.1f}s")
+        logger.info(f"📂 Parsate {len(partite)} partite in {time.time()-t0:.1f}s")
 
         return partite
     except Exception as e:
-        logger.error(f"❌ Errore caricamento quote: {e}")
+        logger.error(f"❌ Errore caricamento {url}: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return []
+
+
+def _chiave_partita(p: Dict) -> Tuple[str, str, str, str]:
+    """Chiave univoca per una partita (per deduplicazione)"""
+    return (
+        normalizza_nome(p.get('casa', '')),
+        normalizza_nome(p.get('ospiti', '')),
+        p.get('dataISO', '') or '',
+        p.get('ora', '') or '',
+    )
+
+
+def load_quote_from_github() -> List[Dict]:
+    """
+    Scarica e parsa TUTTI i PDF di quote configurati in QUOTE_PDF_URLS.
+    Unisce i risultati: se una partita appare in più PDF, unisce le quote
+    (preferendo valori non-None).
+    """
+    tutte_partite: List[Dict] = []
+    indice: Dict[Tuple[str, str, str, str], Dict] = {}
+
+    for url in QUOTE_PDF_URLS:
+        partite = _download_and_parse_pdf(url)
+        logger.info(f"📂 Da {url.split('/')[-1]}: {len(partite)} partite")
+
+        for p in partite:
+            chiave = _chiave_partita(p)
+            if chiave in indice:
+                # Partita già presente: unisci le quote (preferisci non-None)
+                esistente = indice[chiave]
+                for k, v in p['quote'].items():
+                    if esistente['quote'].get(k) is None and v is not None:
+                        esistente['quote'][k] = v
+                # Aggiorna campionato se mancante
+                if not esistente.get('campionato') and p.get('campionato'):
+                    esistente['campionato'] = p['campionato']
+            else:
+                indice[chiave] = p
+                tutte_partite.append(p)
+
+    logger.info(f"✅ Totale partite quote (unite da {len(QUOTE_PDF_URLS)} PDF): {len(tutte_partite)}")
+    return tutte_partite
 
 # ============================================================
 # TROVA QUOTA PER GIOCATA
@@ -377,7 +598,7 @@ def trova_quota_per_giocata(match, family_id: str, giocata: str,
         parts = giocata.split('+')
         if len(parts) == 2:
             dc_q = quote.get(parts[0])
-            over_q = quote.get(parts[1])
+            over_q = quote.get(parts[1].replace('O', 'O'))
             if dc_q and over_q:
                 return round(dc_q * over_q, 2)
     # DC+Under

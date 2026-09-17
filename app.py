@@ -31,7 +31,7 @@ app = Flask(__name__)
 # ============================================================
 
 TOKEN = "8889221419:AAEgOICSM7aLhVGBoFEDs8e-CKW5zKCExVc"
-EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/excel/GesssAI_Input.xlsx"
+EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/excel/GesssAI_Input.xlsx"
 SPLASH_URL = "https://raw.githubusercontent.com/Gesss26/Bot/main/Splashscreen.png"
 
 # ============================================================
@@ -115,7 +115,6 @@ FAMIGLIE_LIST = [
 
 user_states = {}
 
-# Cache quote in memoria
 _quote_cache = {'partite': [], 'timestamp': 0}
 _QUOTE_CACHE_TTL = 3600
 
@@ -188,7 +187,6 @@ def is_match_future(match: Match) -> bool:
             return True
 
 def format_form(form: str) -> str:
-    """Converte la stringa forma (V/P/S) in emoji per Telegram"""
     if not form:
         return '❌'
     return ''.join(['✅' if f == 'V' else '➖' if f == 'P' else '❌' for f in form])
@@ -449,7 +447,6 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
     gg = stats.get('gg', 0); ng = stats.get('ng', 0)
     under_over = stats.get('under_over', [])
 
-    # MG CASA+OSPITE
     if '+' in giocata and '-' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2 and '-' in parts[0] and '-' in parts[1]:
@@ -470,7 +467,6 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
                 else: return 35
         return 50
 
-    # MULTIGOL TOTALE
     if giocata in ['0-2', '1-3', '2-5']:
         if home_media_gol is not None and away_media_gol is not None:
             expected = get_multigol_total_range(home_media_gol, away_media_gol)
@@ -483,7 +479,6 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
             else: return 30
         return 50
 
-    # DC+MULTIGOL
     if giocata.startswith('1X+') and giocata[3:] in ['0-2', '1-3', '2-5']:
         return round((p1X + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
     if giocata.startswith('12+') and giocata[3:] in ['0-2', '1-3', '2-5']:
@@ -491,7 +486,6 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
     if giocata.startswith('X2+') and giocata[3:] in ['0-2', '1-3', '2-5']:
         return round((pX2 + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
 
-    # STANDARD
     if giocata == '1': return p1
     if giocata == 'X': return pX
     if giocata == '2': return p2
@@ -507,7 +501,6 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
     if giocata == 'Under 3.5': return under_over[2]['under'] if len(under_over) > 2 else 0
     if giocata == 'Under 4.5': return under_over[3]['under'] if len(under_over) > 3 else 0
 
-    # DC+OVER / DC+UNDER
     if giocata.startswith('1X+O'):
         return round((p1X + get_giocata_pct(giocata.replace('1X+O', 'Over '), stats)) / 2)
     if giocata.startswith('12+O'):
@@ -666,7 +659,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int, family_ids: List[
         lines.append(f"⚽️ xG: {analysis.home_form['media_gol_fatti']} - {analysis.away_form['media_gol_fatti']}")
         lines.append("")
 
-        # Mostra le giocate per colonna
         for idx_col, family_id in enumerate(family_ids, 1):
             family_label = FAMIGLIE_GIOCATE.get(family_id, {}).get('label', family_id)
             g = next((gg for gg in analysis.giocate if gg.family_id == family_id), None)
@@ -702,9 +694,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int, family_ids: List[
             lines.append("─" * 25)
             lines.append("")
 
-    # ============================================================
-    # SEZIONE QUOTE TOTALI PER COLONNA
-    # ============================================================
     lines.append("")
     lines.append("━" * 25)
     lines.append("🎫 *QUOTE TOTALI PER COLONNA*")

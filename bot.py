@@ -10,7 +10,7 @@ import re
 import json
 import traceback
 
-# Importa il modulo quote
+# Importa il modulo quote (v3 - multi-PDF)
 from quote_utils import (
     load_quote_from_github,
     trova_quota_per_giocata,
@@ -25,7 +25,7 @@ from quote_utils import (
 # ============================================================
 
 TOKEN = "8889221419:AAEgOICSM7aLhVGBoFEDs8e-CKW5zKCExVc"
-EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/master/excel/GesssAI_Input.xlsx"
+EXCEL_URL = "https://raw.githubusercontent.com/Gesss26/GesssAI-Pro---Auto/main/excel/GesssAI_Input.xlsx"
 
 # ============================================================
 # LOGGING
@@ -111,12 +111,10 @@ FAMIGLIE_LIST = [
 
 user_states = {}
 
-# Cache quote in memoria
 _quote_cache = {'partite': [], 'timestamp': 0}
-_QUOTE_CACHE_TTL = 3600  # 1 ora
+_QUOTE_CACHE_TTL = 3600
 
 def get_quote_cached() -> List[Dict]:
-    """Restituisce le quote dalla cache o le ricarica se scadute"""
     global _quote_cache
     now = time.time()
     if now - _quote_cache['timestamp'] > _QUOTE_CACHE_TTL or not _quote_cache['partite']:
@@ -132,21 +130,17 @@ def get_quote_cached() -> List[Dict]:
 def normalize_date(date_str: str) -> Optional[str]:
     if not date_str:
         return None
-
     if isinstance(date_str, (int, float)):
         excel_epoch = datetime(1899, 12, 30)
         date = excel_epoch + timedelta(days=float(date_str))
         return date.strftime("%Y-%m-%d")
-
     date_str = str(date_str).strip()
     if date_str.startswith('20') and '-' in date_str:
         return date_str[:10]
-
     if '/' in date_str:
         parts = date_str.split('/')
         if len(parts) == 3:
             return f"{parts[2]}-{parts[1]}-{parts[0]}"
-
     try:
         date = pd.to_datetime(date_str)
         return date.strftime("%Y-%m-%d")
@@ -168,7 +162,6 @@ def get_today_str() -> str:
 def is_match_future(match: Match) -> bool:
     if match.stato != "Futura":
         return False
-
     try:
         match_datetime_str = f"{match.data} {match.ora}"
         for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H", "%Y-%m-%d"]:
@@ -179,11 +172,10 @@ def is_match_future(match: Match) -> bool:
                 return match_datetime > datetime.now()
             except ValueError:
                 continue
-
         match_date = datetime.strptime(match.data, "%Y-%m-%d")
         return match_date >= datetime.now().date()
     except Exception as e:
-        logger.warning(f"Errore nel filtraggio ora per {match.casa} vs {match.ospiti}: {e}")
+        logger.warning(f"Errore filtraggio ora {match.casa} vs {match.ospiti}: {e}")
         try:
             match_date = datetime.strptime(match.data, "%Y-%m-%d")
             return match_date >= datetime.now().date()
@@ -191,7 +183,6 @@ def is_match_future(match: Match) -> bool:
             return True
 
 def format_form(form: str) -> str:
-    """Converte la stringa forma (V/P/S) in emoji per Telegram"""
     if not form:
         return '❌'
     return ''.join(['✅' if f == 'V' else '➖' if f == 'P' else '❌' for f in form])
@@ -208,18 +199,16 @@ def get_multigol_total_range(media_home: float, media_away: float) -> str:
     else: return "2-5"
 
 # ============================================================
-# CARICAMENTO DATI DAL FILE EXCEL
+# CARICAMENTO DATI
 # ============================================================
 
 def load_excel_from_github() -> Optional[pd.DataFrame]:
     try:
         logger.info(f"📂 Caricamento Excel da: {EXCEL_URL}")
         response = requests.get(EXCEL_URL, timeout=30)
-
         if response.status_code != 200:
             logger.error(f"❌ HTTP {response.status_code}")
             return None
-
         df = pd.read_excel(BytesIO(response.content))
         logger.info(f"✅ Caricate {len(df)} righe")
         return df
@@ -268,7 +257,6 @@ def parse_matches_from_excel(df: pd.DataFrame) -> List[Match]:
 
             if not casa or not ospite:
                 continue
-
             data = normalize_date(data_raw)
             if not data:
                 continue
@@ -366,7 +354,6 @@ def calc_form_and_stats(matches: List[Match], team_name: str) -> Dict:
         else:
             form += 'S'
 
-    # Costruisci form_pallini
     form_pallini = ''
     for f in form:
         if f == 'V':
@@ -409,23 +396,17 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
         is_home = g.casa == home_team
         team_goals = g.golCasa if is_home else g.golOspite
         opp_goals = g.golOspite if is_home else g.golCasa
-        if team_goals > opp_goals:
-            home_wins += 1
-        elif team_goals == opp_goals:
-            home_draws += 1
-        else:
-            home_losses += 1
+        if team_goals > opp_goals: home_wins += 1
+        elif team_goals == opp_goals: home_draws += 1
+        else: home_losses += 1
 
     for g in away_games:
         is_home = g.casa == away_team
         team_goals = g.golCasa if is_home else g.golOspite
         opp_goals = g.golOspite if is_home else g.golCasa
-        if team_goals > opp_goals:
-            away_wins += 1
-        elif team_goals == opp_goals:
-            away_draws += 1
-        else:
-            away_losses += 1
+        if team_goals > opp_goals: away_wins += 1
+        elif team_goals == opp_goals: away_draws += 1
+        else: away_losses += 1
 
     total = len(all_games)
     p1 = ((home_wins + away_losses) / total) * 100 if total > 0 else 0
@@ -453,25 +434,15 @@ def compute_match_stats(match: Match, all_matches: List[Match]) -> Dict:
         'under_over': under_over, 'total_games': total
     }
 
-# ============================================================
-# CALCOLO GIOCATA
-# ============================================================
-
 def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, away_media_gol: float = None) -> int:
     if stats.get('error'):
         return 0
 
-    p1 = stats.get('p1', 0)
-    pX = stats.get('pX', 0)
-    p2 = stats.get('p2', 0)
-    p1X = stats.get('p1X', 0)
-    p12 = stats.get('p12', 0)
-    pX2 = stats.get('pX2', 0)
-    gg = stats.get('gg', 0)
-    ng = stats.get('ng', 0)
+    p1 = stats.get('p1', 0); pX = stats.get('pX', 0); p2 = stats.get('p2', 0)
+    p1X = stats.get('p1X', 0); p12 = stats.get('p12', 0); pX2 = stats.get('pX2', 0)
+    gg = stats.get('gg', 0); ng = stats.get('ng', 0)
     under_over = stats.get('under_over', [])
 
-    # MG CASA+OSPITE (es. 0-2+1-3)
     if '+' in giocata and '-' in giocata:
         parts = giocata.split('+')
         if len(parts) == 2 and '-' in parts[0] and '-' in parts[1]:
@@ -479,58 +450,38 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
                 home_range = get_multigol_range(home_media_gol)
                 away_range = get_multigol_range(away_media_gol)
                 expected = f"{home_range}+{away_range}"
-                if giocata == expected:
-                    return 90
-
+                if giocata == expected: return 90
                 h1, h2 = giocata.split('+')[0].split('-')
                 a1, a2 = giocata.split('+')[1].split('-')
                 eh1, eh2 = home_range.split('-')
                 ea1, ea2 = away_range.split('-')
-
-                diff = (abs(int(h1) - int(eh1)) + abs(int(h2) - int(eh2)) +
-                        abs(int(a1) - int(ea1)) + abs(int(a2) - int(ea2)))
-
-                if diff == 0:
-                    return 90
-                elif diff <= 2:
-                    return 80
-                elif diff <= 4:
-                    return 65
-                elif diff <= 6:
-                    return 50
-                else:
-                    return 35
+                diff = (abs(int(h1)-int(eh1)) + abs(int(h2)-int(eh2)) + abs(int(a1)-int(ea1)) + abs(int(a2)-int(ea2)))
+                if diff == 0: return 90
+                elif diff <= 2: return 80
+                elif diff <= 4: return 65
+                elif diff <= 6: return 50
+                else: return 35
         return 50
 
-    # MULTIGOL TOTALE
     if giocata in ['0-2', '1-3', '2-5']:
         if home_media_gol is not None and away_media_gol is not None:
             expected = get_multigol_total_range(home_media_gol, away_media_gol)
-            if giocata == expected:
-                return 85
+            if giocata == expected: return 85
             g1, g2 = giocata.split('-')
             e1, e2 = expected.split('-')
-            diff = abs(int(g1) - int(e1)) + abs(int(g2) - int(e2))
-            if diff <= 2:
-                return 70
-            elif diff <= 4:
-                return 50
-            else:
-                return 30
+            diff = abs(int(g1)-int(e1)) + abs(int(g2)-int(e2))
+            if diff <= 2: return 70
+            elif diff <= 4: return 50
+            else: return 30
         return 50
 
-    # DC+MULTIGOL
     if giocata.startswith('1X+') and giocata[3:] in ['0-2', '1-3', '2-5']:
-        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
-        return round((p1X + multigol_pct) / 2)
+        return round((p1X + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
     if giocata.startswith('12+') and giocata[3:] in ['0-2', '1-3', '2-5']:
-        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
-        return round((p12 + multigol_pct) / 2)
+        return round((p12 + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
     if giocata.startswith('X2+') and giocata[3:] in ['0-2', '1-3', '2-5']:
-        multigol_pct = get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)
-        return round((pX2 + multigol_pct) / 2)
+        return round((pX2 + get_giocata_pct(giocata[3:], stats, home_media_gol, away_media_gol)) / 2)
 
-    # GIOCATE STANDARD
     if giocata == '1': return p1
     if giocata == 'X': return pX
     if giocata == '2': return p2
@@ -546,26 +497,18 @@ def get_giocata_pct(giocata: str, stats: Dict, home_media_gol: float = None, awa
     if giocata == 'Under 3.5': return under_over[2]['under'] if len(under_over) > 2 else 0
     if giocata == 'Under 4.5': return under_over[3]['under'] if len(under_over) > 3 else 0
 
-    # DC+OVER / DC+UNDER
     if giocata.startswith('1X+O'):
-        over = giocata.replace('1X+O', 'Over ')
-        return round((p1X + get_giocata_pct(over, stats)) / 2)
+        return round((p1X + get_giocata_pct(giocata.replace('1X+O', 'Over '), stats)) / 2)
     if giocata.startswith('12+O'):
-        over = giocata.replace('12+O', 'Over ')
-        return round((p12 + get_giocata_pct(over, stats)) / 2)
+        return round((p12 + get_giocata_pct(giocata.replace('12+O', 'Over '), stats)) / 2)
     if giocata.startswith('X2+O'):
-        over = giocata.replace('X2+O', 'Over ')
-        return round((pX2 + get_giocata_pct(over, stats)) / 2)
-
+        return round((pX2 + get_giocata_pct(giocata.replace('X2+O', 'Over '), stats)) / 2)
     if giocata.startswith('1X+U'):
-        under = giocata.replace('1X+U', 'Under ')
-        return round((p1X + get_giocata_pct(under, stats)) / 2)
+        return round((p1X + get_giocata_pct(giocata.replace('1X+U', 'Under '), stats)) / 2)
     if giocata.startswith('12+U'):
-        under = giocata.replace('12+U', 'Under ')
-        return round((p12 + get_giocata_pct(under, stats)) / 2)
+        return round((p12 + get_giocata_pct(giocata.replace('12+U', 'Under '), stats)) / 2)
     if giocata.startswith('X2+U'):
-        under = giocata.replace('X2+U', 'Under ')
-        return round((pX2 + get_giocata_pct(under, stats)) / 2)
+        return round((pX2 + get_giocata_pct(giocata.replace('X2+U', 'Under '), stats)) / 2)
 
     return 0
 
@@ -631,7 +574,6 @@ def analyze_matches(matches: List[Match], family_ids: List[str], days_range: int
             if not best:
                 continue
 
-            # Quota e value bet (quota None se non trovata)
             quota = trova_quota_per_giocata(match, family_id, best['giocata'], partite_quote)
             edge = quota_fair = kelly = classificazione = None
             if quota:
@@ -756,10 +698,8 @@ def generate_report(analyses: List[MatchAnalysis], count: int, family_ids: List[
         lines.append(f"⚽ xG: {match.casa} {analysis.home_form['media_gol_fatti']} | {match.ospiti} {analysis.away_form['media_gol_fatti']}")
         lines.append("")
 
-        # Mostra le giocate raggruppate per famiglia (una per colonna)
         for idx_col, family_id in enumerate(family_ids, 1):
             family_label = FAMIGLIE_GIOCATE.get(family_id, {}).get('label', family_id)
-            # Trova la giocata corrispondente in questa analisi
             g = next((gg for gg in analysis.giocate if gg.family_id == family_id), None)
             if not g:
                 continue
@@ -799,9 +739,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int, family_ids: List[
             lines.append("─" * 30)
             lines.append("")
 
-    # ============================================================
-    # SEZIONE QUOTE TOTALI PER COLONNA
-    # ============================================================
     lines.append("")
     lines.append("━" * 30)
     lines.append("🎫 <b>QUOTE TOTALI PER COLONNA</b>")
@@ -813,7 +750,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int, family_ids: List[
     for idx_col, family_id in enumerate(family_ids, 1):
         family_label = FAMIGLIE_GIOCATE.get(family_id, {}).get('label', family_id)
 
-        # Raccogli tutte le giocate di questa colonna dalle top partite
         giocate_colonna = []
         for analysis in top:
             g = next((gg for gg in analysis.giocate if gg.family_id == family_id), None)
@@ -841,7 +777,6 @@ def generate_report(analyses: List[MatchAnalysis], count: int, family_ids: List[
             lines.append(f"⚠️ {stats_col['n_quote_mancanti']} quote mancanti (sostituite con 1.00)")
         lines.append("")
 
-    # Sistema completo (3 colonne insieme)
     if colonne_stats:
         sistema = calcola_quota_sistema(colonne_stats)
         lines.append("━" * 30)
@@ -1089,6 +1024,7 @@ Clicca su un numero per cambiare, poi <b>✅ CONFERMA</b>"""
 def run_polling():
     logger.info("🔄 Avvio bot...")
     logger.info(f"📂 Excel: {EXCEL_URL}")
+    logger.info(f"📂 Quote PDF: {len(__import__('quote_utils').QUOTE_PDF_URLS)} file configurati")
     offset = None
 
     while True:
@@ -1121,13 +1057,13 @@ def run_polling():
 # ============================================================
 
 if __name__ == "__main__":
-    print("🤖 GesssAI-Pro Telegram Bot")
-    print("=" * 40)
+    print("🤖 GesssAI-Pro Telegram Bot v3.0")
+    print("=" * 50)
     print(f"📂 Excel: {EXCEL_URL}")
     print("")
     print("In attesa di messaggi...")
     print("Premi CTRL+C per fermare")
-    print("=" * 40)
+    print("=" * 50)
 
     try:
         run_polling()
